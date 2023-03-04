@@ -11,3 +11,6 @@ anyhow = { version = "1.0.66", features = ["std", "backtrace"] }
 elf = "0.0.10"
 ironic-core = { path = "../core" }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
+
+[target.'cfg(windows)'.dependencies]
+uds_windows = "1.0.2"
