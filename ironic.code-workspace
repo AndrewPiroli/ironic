@@ -1,0 +1,92 @@
+{
+	"folders": [
+		{
+			"path": ".",
+			"name": "root",
+		},
+		{
+			"path": "./back",
+			"name": "back"
+		},
+		{
+			"path": "./core",
+			"name": "core"
+		},
+		{
+			"path": "./tui",
+			"name": "tui"
+		}
+	],
+	"settings": {
+		"files.exclude": {
+			"**/.git": true,
+			"**/.svn": true,
+			"**/.hg": true,
+			"**/CVS": true,
+			"**/.DS_Store": true,
+			"**/Thumbs.db": true,
+			"**/*.bin": true,
+			"**/target": true,
+		},
+		"debug.allowBreakpointsEverywhere": true
+	},
+	"extensions": {
+		"recommendations": [
+			"ms-vscode.cpptools",
+			"vadimcn.vscode-lldb",
+			"dan-c-underwood.arm",
+			"1yib.rust-bundle",
+			"dustypomerleau.rust-syntax",
+			"rust-lang.rust-analyzer",
+			"ms-python.python",
+			"serayuzgur.crates"
+		]
+	},
+	"launch":
+	{
+		// Use IntelliSense to learn about possible attributes.
+		// Hover to view descriptions of existing attributes.
+		// For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+		"version": "0.2.0",
+		"configurations": [
+			{
+				"type": "lldb",
+				"request": "launch",
+				"name": "Debug StarStruck",
+				"cargo": {
+					"args": [
+						"build",
+						"--manifest-path=${workspaceFolder:root}/Cargo.toml",
+						"--bin=ironic-tui",
+						"--package=ironic-tui"
+					],
+					"filter": {
+						"name": "ironic-tui",
+						"kind": "bin"
+					}
+				},
+				"args": ["-c", "starstruck-feature.elf", "-p", "true"],
+				"cwd": "${workspaceFolder:root}"
+			},
+			{
+				"type": "lldb",
+				"request": "launch",
+				"name": "Debug IOS",
+				"cargo": {
+					"args": [
+						"build",
+						"--manifest-path=${workspaceFolder:root}/Cargo.toml",
+						"--bin=ironic-tui",
+						"--package=ironic-tui"
+					],
+					"filter": {
+						"name": "ironic-tui",
+						"kind": "bin"
+					}
+				},
+				"args": ["-p", "true"],
+				"cwd": "${workspaceFolder:root}"
+			},
+		]
+	}
+}

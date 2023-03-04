@@ -1,0 +1,7 @@
+{
+  "files.exclude": {
+      "back" : true,
+      "core" : true,
+      "tui" : true,
+	},
+}

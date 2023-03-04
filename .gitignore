@@ -1,14 +1,11 @@
-/target
 /doc
-/core/target
 /core/Cargo.lock
-/ui/target
 /ui/Cargo.lock
-/tui/target
 /tui/Cargo.lock
 pyronic/__pycache__/
 *.pyc
 *.bin
 *.sym
+**/target
 perf.data
 perf.data.old
