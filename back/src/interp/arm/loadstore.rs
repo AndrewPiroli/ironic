@@ -1,9 +1,7 @@
 //! Load/store instructions.
 
-use std::sync::RwLockReadGuard;
 
 use anyhow::bail;
-use ironic_core::bus::Bus;
 use ironic_core::cpu::Cpu;
 use ironic_core::cpu::reg::CpuMode;
 use ironic_core::cpu::alu::*;
@@ -240,7 +238,6 @@ pub fn ldm_user(cpu: &mut Cpu, op: LdmRegUserBits) -> DispatchRes {
     }
     for i in 0..16 {
         if (reglist & (1 << i)) != 0 {
-
             let val = match cpu.read32(addr) {
                 Ok(val) => val,
                 Err(reason) => {
@@ -295,10 +292,8 @@ pub fn ldm_user_pc(cpu: &mut Cpu, op: LdmRegUserBits) -> DispatchRes {
     };
     addr += 4;
     if op.w() {
-        dbg!(addr);
         cpu.reg[op.rn()] = addr;
     }
-
     if let Err(reason) = cpu.exception_return(new_pc){
         return DispatchRes::FatalErr(reason);
     };

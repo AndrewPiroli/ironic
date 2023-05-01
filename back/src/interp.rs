@@ -340,14 +340,31 @@ impl InterpBackend {
             // why this is permissible. What does the hardware actually do?
             DispatchRes::Exception(e) => {
                 if e == ExceptionType::Swi {
-                    self.cpu.increment_pc();
-                    CpuRes::Semihosting
-                } else {
-                    if let Err(reason) = self.cpu.generate_exception(e){
-                        return CpuRes::HaltEmulation(reason);
-                    };
-                    CpuRes::StepException(e)
+                    // Detect if this is an SVC 0xAB
+                    // If so this is a semihosting debug print and we need to handle it
+                    // Note, the PC has not yet been advanced!
+                    if self.cpu.reg.cpsr.thumb() {
+                        let opcd = self.cpu.read16(self.cpu.read_fetch_pc()).unwrap_or_default(); // Fail gracefully
+                        if opcd == 0xdfab { // thumb svc 0xAB
+                            self.cpu.increment_pc();
+                            return CpuRes::Semihosting;
+                        }
+                    }
+                    else {
+                        let opcd = self.cpu.read32(self.cpu.read_fetch_pc()).unwrap_or_default(); // Fail gracefully
+                        // strip condition (it must have already passed) and opcode bits
+                        let opcd = opcd & 0x00ff_ffff;
+                        if opcd == 0xAB {
+                            self.cpu.increment_pc();
+                            return CpuRes::Semihosting;
+                        }
+                    }
+                    // fall through all other Swis to the exception handler
                 }
+                if let Err(reason) = self.cpu.generate_exception(e){
+                    return CpuRes::HaltEmulation(reason);
+                };
+                CpuRes::StepException(e)
             },
 
             DispatchRes::FatalErr(reason) => {
@@ -444,6 +461,7 @@ impl Backend for InterpBackend {
                     match e {
                         ExceptionType::Undef(_) => {},
                         ExceptionType::Irq => {},
+                        ExceptionType::Swi => {},
                         _ => {
                             info!(target: "Other", "Unimplemented exception type {e:?}");
                             break;

@@ -1,4 +1,5 @@
 use ironic_core::cpu::Cpu;
+use ironic_core::cpu::excep::ExceptionType;
 use log::{debug, info};
 use crate::bits::arm::*;
 use crate::interp::DispatchRes;
@@ -40,4 +41,8 @@ pub fn bkpt(cpu: &mut Cpu, op: BkptBits) -> DispatchRes {
     }
     cpu.scratch = cmd as u32;
     DispatchRes::Breakpoint
+}
+
+pub fn svc(_cpu: &mut Cpu, _op: u32) -> DispatchRes {
+    DispatchRes::Exception(ExceptionType::Swi)
 }
