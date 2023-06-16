@@ -1,0 +1,17 @@
+[package]
+name = "elf2"
+version = "0.0.12"
+authors = ["Christopher Cole <chris.cole.09@gmail.com>", "Andrew Piroli"]
+license = "MIT/Apache-2.0"
+homepage = "https://github.com/AndrewPiroli/rust-elf2/"
+repository = "https://github.com/AndrewPiroli/rust-elf2/"
+description = "A pure-rust library for parsing ELF files"
+keywords = ["elf"]
+readme = "README.md"
+edition = "2021"
+
+[lib]
+name = "elf"
+
+[dependencies]
+thiserror = "~1.0.40"
