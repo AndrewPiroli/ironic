@@ -10,10 +10,10 @@ pub fn read_u16<T: io::Read>(endian: types::Data, io: &mut T) -> Result<u16, Par
         types::ELFDATA2LSB => Ok(u16::from_le_bytes(buf)),
         types::ELFDATA2MSB => Ok(u16::from_be_bytes(buf)),
         types::ELFDATANONE => {
-            return Err(ParseError::EndianError);
+            Err(ParseError::EndianError)
         }
         _ => {
-            return Err(ParseError::EndianError);
+            Err(ParseError::EndianError)
         }
     }
 }
@@ -26,10 +26,10 @@ pub fn read_u32<T: io::Read>(endian: types::Data, io: &mut T) -> Result<u32, Par
         types::ELFDATA2LSB => Ok(u32::from_le_bytes(buf)),
         types::ELFDATA2MSB => Ok(u32::from_be_bytes(buf)),
         types::ELFDATANONE => {
-            return Err(ParseError::EndianError);
+            Err(ParseError::EndianError)
         }
         _ => {
-            return Err(ParseError::EndianError);
+            Err(ParseError::EndianError)
         }
     }
 }
@@ -42,15 +42,14 @@ pub fn read_u64<T: io::Read>(endian: types::Data, io: &mut T) -> Result<u64, Par
         types::ELFDATA2LSB => Ok(u64::from_le_bytes(buf)),
         types::ELFDATA2MSB => Ok(u64::from_be_bytes(buf)),
         types::ELFDATANONE => {
-            return Err(ParseError::EndianError);
+            Err(ParseError::EndianError)
         }
         _ => {
-            return Err(ParseError::EndianError);
+            Err(ParseError::EndianError)
         }
     }
 }
 
-use std;
 pub fn get_string(data: &[u8], start: usize) -> Result<String, std::string::FromUtf8Error> {
     String::from_utf8(Vec::from_iter(data[start..].iter().take_while(|c|**c != 0).copied()))
 }
