@@ -13,7 +13,7 @@ anyhow = { version = "1.0.70", features = ["std", "backtrace"] }
 fxhash = "0.2.1"
 log = { version = "0.4.17", default-features = false, features = ["std"] }
 gimli = "~0.27.2"
-crc32fast = { version = "~1.3.2", default-features = false, features = ["std", "nightly"] }
+crc32fast = { version = "~1.4.0", default-features = false, features = ["std", "nightly"] }
 bincode = { version = "~2.0.0-rc.3" }
 lz4_flex = { version = "~0.11.1", default-features = false, features = ["std", "safe-encode", "safe-decode", "frame"] }
 iset = { version = "~0.2.2", default-features = false }
