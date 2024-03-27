@@ -9,8 +9,8 @@ use crate::back::*;
 
 use log::{info, error};
 use parking_lot::RwLock;
-
-use std::env::temp_dir;
+// do not commit
+//use std::env::temp_dir;
 use std::path::PathBuf;
 use std::thread;
 use std::sync::Arc;
@@ -97,10 +97,14 @@ impl PpcBackend {
 
 impl PpcBackend {
 
+
+    // do not commit
     fn resolve_socket_path() -> PathBuf {
-        let mut dir = temp_dir();
+        // let mut dir = temp_dir();
+        let mut dir = PathBuf::new();
+        dir.push("/tmp");
         dir.push(IPC_SOCK);
-        dir
+        dbg!(dir)
     }
 
     /// Handle clients connected to the socket.
