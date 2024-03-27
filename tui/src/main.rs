@@ -205,6 +205,7 @@ enum LogTarget {
     NAND,
     OTP,
     PPC,
+    SDHC,
     SEEPROM,
     SHA,
     SYSCALL,

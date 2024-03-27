@@ -28,7 +28,8 @@
 			"**/*.bin": true,
 			"**/target": true,
 		},
-		"debug.allowBreakpointsEverywhere": true
+		"debug.allowBreakpointsEverywhere": true,
+		"rust-analyzer.showUnlinkedFileNotification": false
 	},
 	"extensions": {
 		"recommendations": [
