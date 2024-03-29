@@ -1,9 +1,16 @@
 use anyhow::bail;
 use log::debug;
+use log::error;
 
 use crate::bus::prim::*;
 use crate::bus::mmio::*;
 use crate::bus::task::*;
+use crate::bus::Bus;
+
+#[derive(Debug)]
+pub enum SDHCTask {
+    RaiseInt,
+}
 
 #[derive(Debug, Copy, Clone)]
 enum SDRegisters {
@@ -42,12 +49,22 @@ impl SDRegisters {
         let mut ret = Vec::with_capacity(4);
         let mut shift = 0u32;
         for reg in (off..off+4).filter_map(Self::reg_from_offset) {
-            // Build a mask for the next register
+            // is this a large (32bit +) register?
+            if reg.bytecount_of_reg() >= 4 {
+                // yes, we're done
+                // NOTE: no need to check must_always_handle_writes because there are no 32-bit+ registers with this property
+                if old != new {
+                    ret.push(reg);
+                }
+                return ret;
+            }
+            // Else, build a mask for the next register
             let mask: u32 = ((1 << (reg.bytecount_of_reg() * 8)) - 1) << shift;
-            if old & mask != new & mask {
+            if reg.must_always_handle_writes() || old & mask != new & mask {
                 ret.push(reg);
             }
             shift += reg.bytecount_of_reg() as u32 * 8;
+            debug_assert!(shift <= 32);
         }
         ret
     }
@@ -146,43 +163,96 @@ impl SDRegisters {
             SDRegisters::HostControllerVersion => 2,
         }
     }
-    fn run_write_handler(&self, iface: &mut NewSDInterface, old: u32, new: u32) {
-        // Calculate shift to move the register in question to the right most position
-        let shift = (self.base_offset() & 0x3) * 8;
-        let mask: u32 = (1 << (self.bytecount_of_reg() * 8)) - 1;
-        let _old = (old >> shift) & mask;
-        let mut new = (new >> shift) & mask;
+    // These registers have RW1C bits, so writing a 1 to them clears the bit
+    // The normal old != new check is not enough
+    fn must_always_handle_writes(&self) -> bool {
         match self {
+            SDRegisters::NormalIntStatus |
+            SDRegisters::ErrorIntStatus => true,
+            _ => false,
+        }
+    }
+    fn run_write_handler(&self, iface: &mut NewSDInterface, old: u32, new: u32) -> Option<SDHCTask> {
+        let shift: usize;
+        let mask: u32;
+        if self.bytecount_of_reg() >= 4 {
+            shift = 0;
+            mask = 0xffff_ffff;
+        }
+        else {
+            // Calculate shift to move the register in question to the right most position
+            shift = (self.base_offset() & 0x3) * 8;
+            mask = (1 << (self.bytecount_of_reg() * 8)) - 1;
+        }
+        let old = (old >> shift) & mask;
+        let mut new = (new >> shift) & mask;
+        debug!(target: "SDHC", "write handler for {self:?} {old:x} {new:x}");
+        match self {
+            SDRegisters::NormalIntStatus => {
+                const RW1C_MASK: u32 = 0x1ff; // mask of the bits that are rw1c, all others are reserved or ROC.
+                let clearbits = (old & RW1C_MASK) ^ (new & RW1C_MASK);
+                let new = (old & !RW1C_MASK) | clearbits;
+                println!("normalintstatus {old:b} {new:b}");
+                iface.setreg(*self, new);
+            },
+            SDRegisters::ErrorIntStatus => {
+                const RW1C_MASK: u32 = 0xf1ff; // mask of the bits that are rw1c, all others are reserved or ROC.
+                let clearbits = (old & RW1C_MASK) ^ (new & RW1C_MASK);
+                let new = (old & !RW1C_MASK) | clearbits;
+                iface.setreg(*self, new);
+            },
+            SDRegisters::NormalIntSignalEnable => { //TODO
+                println!("Normal Int Signal Enable {new:b}");
+                iface.setreg(*self, new);
+                if let Some(do_insert_int) = iface.insert_card() {
+                    return Some(do_insert_int);
+                }
+            },
+            SDRegisters::NormalIntStatusEnable => { //TODO
+                println!("Normal Int Status Enable {new:b}");
+                iface.setreg(*self, new);
+                if let Some(do_insert_int) = iface.insert_card() {
+                    return Some(do_insert_int);
+                }
+            },
             SDRegisters::ClockControl => {
                 // set internal clock stable (bit 1) based on internal clock enable (bit 0)
-                match new & 0b11 {
-                    0b11 | 0b00 => {return;},
-                    0b10 => {
-                        debug!(target: "SDHC", "Internal Clock Disable");
+                match new & 0b1 {
+                    0b0 => {
                         new = new & 0xffff_fffc;
                     }
-                    0b01 => {
-                        debug!(target:"SDHC", "Internal Clock Enable");
-                        new = new & 0b10;
+                    0b1 => {
+                        new = new | 0b10;
                     }
-                    _=> { unreachable!() }
+                    _=> {}
                 }
                 iface.setreg(*self, new);
-            }
+            },
             SDRegisters::SoftwareReset => {
                 if new & 1 == 1 {
                     iface.reset();
                 }
                 else { unimplemented!("DAT and CMD line resets"); }
+            },
+            SDRegisters::ErrorIntStatusEnable |
+            SDRegisters::ErrorIntSignalEnable |
+            SDRegisters::TimeoutControl |
+            SDRegisters::PowerControl => {
+                iface.setreg(*self, new);
+            },
+            other => {
+                error!(target: "SDHC", "Unhandled write to register: {other:?}");
+                iface.setreg(*other, new);
             }
-            _ => unimplemented!()
         }
+        None
     }
 }
 
 #[repr(C, align(64))]
 pub struct NewSDInterface {
     register_file: [u8; 256],
+    insert_raised: bool,
 }
 
 impl NewSDInterface {
@@ -213,7 +283,7 @@ impl NewSDInterface {
             _ => {},
         }
         let val_shift = (reg.base_offset() & 0x3) * 8;
-        let mask: u32 = (1 << reg.bytecount_of_reg()) - 1;
+        let mask: u32 = ((1 << (reg.bytecount_of_reg()*8)) - 1) << val_shift;
         let old = self.raw_read(reg.base_offset() & 0xffff_fffc) & !mask;
         let new = old | ((val << val_shift) & mask);
         self.raw_write(reg.base_offset() & 0xffff_fffc, new);
@@ -222,11 +292,34 @@ impl NewSDInterface {
         debug!(target: "SDHC", "SD interface software reset");
         *self = Self::default();
     }
+    fn insert_card(&mut self) -> Option<SDHCTask> {
+        if self.insert_raised {
+            return None;
+        }
+        let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
+        let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
+        const INSERT_INT_MASK: u32 = 1 << 6;
+        if signal & INSERT_INT_MASK != 0 && status & INSERT_INT_MASK != 0 {
+            let current_state = self.raw_read(SDRegisters::PresentState.base_offset());
+            self.setreg(SDRegisters::PresentState, current_state | (1<<16) | (1<<17) | (1 << 18)); // card inserted
+            self.setreg(SDRegisters::NormalIntStatus, 1<<6); // card inserted interrupt
+            self.setreg(SDRegisters::SlotIntStatus, 1); // slot 1 interrupt flag
+            self.insert_raised = true;
+            return Some(SDHCTask::RaiseInt);
+        }
+        None
+    }
 }
 
 impl Default for NewSDInterface {
     fn default() -> Self {
-        let new = Self { register_file: [0;256] };
+        let mut new = Self { register_file: [0;256], insert_raised: false };
+        // Fill HWInit registers
+        // Advertise 3.3v support in Capabilities Register
+        new.raw_write(SDRegisters::Capabilities.base_offset(), 1 << 24);
+        // Advertise the maximum current capability for 3.3v
+        new.raw_write(SDRegisters::MaxCurrentCapabilities.base_offset(), 0xff);
+        // End HWInit Registers
         debug!(target: "SDHC", "init sdhc");
         new
     }
@@ -242,15 +335,21 @@ impl MmioDevice for NewSDInterface {
     fn write(&mut self, off: usize, val: Self::Width) -> anyhow::Result<Option<BusTask>> {
         // first read the current line to get the old
         let old = self.raw_read(off);
-        // perform write
-        self.raw_write(off, val);
-        let new = self.raw_read(off);
-        let regs = SDRegisters::get_affected_registers(off, old, new);
+        let regs = SDRegisters::get_affected_registers(off, old, val);
         debug!(target: "SDHC", "{:?}", &regs);
+        //fixme: multiple tasks?
+        let mut tasks = Vec::new();
         for reg in regs {
-            reg.run_write_handler(self, old, new);
+            if let Some(task) = reg.run_write_handler(self, old, val) {
+                tasks.push(task);
+            }
         }
-        Ok(None)
+        if tasks.is_empty() {
+            Ok(None)
+        }
+        else {
+            Ok(Some(BusTask::SDHC(tasks.pop().unwrap())))
+        }
     }
 }
 
@@ -275,5 +374,18 @@ impl MmioDevice for WLANInterface {
     }
     fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         bail!("SDHC1 write {val:08x} at {off:x} unimpl")
+    }
+}
+
+
+impl Bus {
+    pub(crate) fn handle_task_sdhc(&mut self, task: SDHCTask) {
+        use super::hlwd::irq::HollywoodIrq;
+        match task {
+            SDHCTask::RaiseInt => {
+                debug!(target: "SDHC", "Raising SDHC interrupt.");
+                self.hlwd.irq.assert(HollywoodIrq::Sdhc);
+            },
+        }
     }
 }
