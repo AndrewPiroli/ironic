@@ -207,12 +207,18 @@ impl SDRegisters {
                 if let Some(do_insert_int) = iface.insert_card() {
                     return Some(do_insert_int);
                 }
+                if let Some(first_ack) = iface.first_ack() {
+                    return Some(first_ack);
+                }
             },
             SDRegisters::NormalIntStatusEnable => { //TODO
                 println!("Normal Int Status Enable {new:b}");
                 iface.setreg(*self, new);
                 if let Some(do_insert_int) = iface.insert_card() {
                     return Some(do_insert_int);
+                }
+                if let Some(first_ack) = iface.first_ack() {
+                    return Some(first_ack);
                 }
             },
             SDRegisters::ClockControl => {
@@ -253,6 +259,7 @@ impl SDRegisters {
 pub struct NewSDInterface {
     register_file: [u8; 256],
     insert_raised: bool,
+    first_ack: bool,
 }
 
 impl NewSDInterface {
@@ -290,7 +297,11 @@ impl NewSDInterface {
     }
     fn reset(&mut self) {
         debug!(target: "SDHC", "SD interface software reset");
-        *self = Self::default();
+        let mut new = Self::default();
+        let card_detection_circuit_status = self.raw_read(SDRegisters::PresentState.base_offset()) & 0x70000;
+        new.raw_write(SDRegisters::PresentState.base_offset(), card_detection_circuit_status);
+        new.insert_raised = self.insert_raised;
+        *self = new;
     }
     fn insert_card(&mut self) -> Option<SDHCTask> {
         if self.insert_raised {
@@ -309,11 +320,27 @@ impl NewSDInterface {
         }
         None
     }
+    fn first_ack(&mut self) -> Option<SDHCTask> {
+        if self.first_ack {
+            return None;
+        }
+        let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
+        let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
+        const CMD_COMPLETE_MASK: u32 = 1;
+        if signal & CMD_COMPLETE_MASK != 0 && status & CMD_COMPLETE_MASK != 0 {
+            self.setreg(SDRegisters::NormalIntStatus, 1); // command complete
+            self.setreg(SDRegisters::SlotIntStatus, 1);
+            self.first_ack = true;
+            debug!(target: "SDHC", "Sending inital ack for card setup");
+            return Some(SDHCTask::RaiseInt);
+        }
+        return None;
+    }
 }
 
 impl Default for NewSDInterface {
     fn default() -> Self {
-        let mut new = Self { register_file: [0;256], insert_raised: false };
+        let mut new = Self { register_file: [0;256], insert_raised: false, first_ack: false };
         // Fill HWInit registers
         // Advertise 3.3v support in Capabilities Register
         new.raw_write(SDRegisters::Capabilities.base_offset(), 1 << 24);
