@@ -1,11 +1,14 @@
 use anyhow::bail;
 use log::debug;
 use log::error;
+use log::warn;
 
 use crate::bus::prim::*;
 use crate::bus::mmio::*;
 use crate::bus::task::*;
 use crate::bus::Bus;
+
+pub(crate) mod card;
 
 #[derive(Debug)]
 pub enum SDHCTask {
@@ -188,6 +191,14 @@ impl SDRegisters {
         let mut new = (new >> shift) & mask;
         debug!(target: "SDHC", "write handler for {self:?} {old:x} {new:x}");
         match self {
+            SDRegisters::Command => {
+                if old & 0xff00 != new & 0xff00 {
+                    let x = card::Command::from(new);
+                    dbg!(x);
+                    // testing
+                    iface.tx_complete();
+                }
+            }
             SDRegisters::NormalIntStatus => {
                 const RW1C_MASK: u32 = 0x1ff; // mask of the bits that are rw1c, all others are reserved or ROC.
                 let clearbits = (old & RW1C_MASK) ^ (new & RW1C_MASK);
@@ -240,6 +251,7 @@ impl SDRegisters {
                 }
                 else { unimplemented!("DAT and CMD line resets"); }
             },
+            SDRegisters::Argument |
             SDRegisters::ErrorIntStatusEnable |
             SDRegisters::ErrorIntSignalEnable |
             SDRegisters::TimeoutControl |
@@ -334,7 +346,20 @@ impl NewSDInterface {
             debug!(target: "SDHC", "Sending inital ack for card setup");
             return Some(SDHCTask::RaiseInt);
         }
-        return None;
+        None
+    }
+    fn tx_complete(&mut self) -> Option<SDHCTask> {
+        let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
+        let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
+        const CMD_COMPLETE_MASK: u32 = 1;
+        if signal & CMD_COMPLETE_MASK != 0 && status & CMD_COMPLETE_MASK != 0 {
+            self.setreg(SDRegisters::NormalIntStatus, 1); // command complete
+            self.setreg(SDRegisters::SlotIntStatus, 1);
+            self.first_ack = true;
+            warn!(target: "SDHC", "raising Tx completet interrupt");
+            return Some(SDHCTask::RaiseInt);
+        }
+        None
     }
 }
 
