@@ -1,14 +1,16 @@
+pub(crate) mod card;
+
 use anyhow::bail;
 use log::debug;
 use log::error;
+use log::trace;
 use log::warn;
 
 use crate::bus::prim::*;
 use crate::bus::mmio::*;
 use crate::bus::task::*;
 use crate::bus::Bus;
-
-pub(crate) mod card;
+use card::*;
 
 #[derive(Debug)]
 pub enum SDHCTask {
@@ -175,7 +177,7 @@ impl SDRegisters {
             _ => false,
         }
     }
-    fn run_write_handler(&self, iface: &mut NewSDInterface, old: u32, new: u32) -> Option<SDHCTask> {
+    fn run_write_handler(&mut self, iface: &mut NewSDInterface, old: u32, new: u32) -> Option<SDHCTask> {
         let shift: usize;
         let mask: u32;
         if self.bytecount_of_reg() >= 4 {
@@ -194,9 +196,12 @@ impl SDRegisters {
             SDRegisters::Command => {
                 if old & 0xff00 != new & 0xff00 {
                     let x = card::Command::from(new);
-                    dbg!(x);
-                    // testing
-                    iface.tx_complete();
+                    dbg!(&x);
+                    let cmd = x.index;
+                    if let Some(response) = iface.card.issue(x, iface.raw_read(SDRegisters::Argument.base_offset())){
+                        self.apply_response(iface, response);
+                    }
+                    if cmd != 55 { iface.cmd_complete(); }
                 }
             }
             SDRegisters::NormalIntStatus => {
@@ -265,6 +270,14 @@ impl SDRegisters {
         }
         None
     }
+    fn apply_response(&mut self, iface: &mut NewSDInterface, response: Response) {
+        match response {
+            Response::Regular(r) => {
+                iface.raw_write(SDRegisters::Response.base_offset(), r & 0x7fff_ffff);
+            },
+            _ => unimplemented!(),
+        }
+    }
 }
 
 #[repr(C, align(64))]
@@ -272,6 +285,7 @@ pub struct NewSDInterface {
     register_file: [u8; 256],
     insert_raised: bool,
     first_ack: bool,
+    card: Card,
 }
 
 impl NewSDInterface {
@@ -281,7 +295,7 @@ impl NewSDInterface {
         let off = off >> 2;
         assert!(off < 64); //length
         let ret = unsafe { *(p.add(off)) };
-        debug!(target: "SDHC", "raw_read 0x{:x} = 0x{ret:x}", off << 2);
+        trace!(target: "SDHC", "raw_read 0x{:x} = 0x{ret:x}", off << 2);
         ret
     }
     fn raw_write(&mut self, off: usize, val: u32) {
@@ -290,7 +304,7 @@ impl NewSDInterface {
         let off = off >> 2;
         assert!(off < 64); //length
         unsafe { *(p.add(off)) = val; };
-        debug!(target: "SDHC", "raw_write 0x{:x} = 0x{val:x}", off << 2);
+        trace!(target: "SDHC", "raw_write 0x{:x} = 0x{val:x}", off << 2);
     }
     fn setreg(&mut self, reg: SDRegisters, val: u32) {
         match reg.bytecount_of_reg() {
@@ -348,15 +362,14 @@ impl NewSDInterface {
         }
         None
     }
-    fn tx_complete(&mut self) -> Option<SDHCTask> {
+    fn cmd_complete(&mut self) -> Option<SDHCTask> {
         let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
         let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
         const CMD_COMPLETE_MASK: u32 = 1;
         if signal & CMD_COMPLETE_MASK != 0 && status & CMD_COMPLETE_MASK != 0 {
             self.setreg(SDRegisters::NormalIntStatus, 1); // command complete
             self.setreg(SDRegisters::SlotIntStatus, 1);
-            self.first_ack = true;
-            warn!(target: "SDHC", "raising Tx completet interrupt");
+            warn!(target: "SDHC", "raising Cmd completet interrupt");
             return Some(SDHCTask::RaiseInt);
         }
         None
@@ -365,7 +378,7 @@ impl NewSDInterface {
 
 impl Default for NewSDInterface {
     fn default() -> Self {
-        let mut new = Self { register_file: [0;256], insert_raised: false, first_ack: false };
+        let mut new = Self { register_file: [0;256], insert_raised: false, first_ack: false, card: Card::default() };
         // Fill HWInit registers
         // Advertise 3.3v support in Capabilities Register
         new.raw_write(SDRegisters::Capabilities.base_offset(), 1 << 24);
@@ -381,17 +394,19 @@ impl MmioDevice for NewSDInterface {
     type Width = u32;
 
     fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+        debug!(target: "SDHC", "MMIO read: 0x{off:x}");
         Ok(BusPacket::Word(self.raw_read(off)))
     }
 
     fn write(&mut self, off: usize, val: Self::Width) -> anyhow::Result<Option<BusTask>> {
+        debug!(target: "SDHC", "MMIO write: 0x{off:x} = 0x{val:x}");
         // first read the current line to get the old
         let old = self.raw_read(off);
         let regs = SDRegisters::get_affected_registers(off, old, val);
         debug!(target: "SDHC", "{:?}", &regs);
         //fixme: multiple tasks?
         let mut tasks = Vec::new();
-        for reg in regs {
+        for mut reg in regs {
             if let Some(task) = reg.run_write_handler(self, old, val) {
                 tasks.push(task);
             }
