@@ -177,7 +177,7 @@ impl SDRegisters {
             _ => false,
         }
     }
-    fn run_write_handler(&mut self, iface: &mut NewSDInterface, old: u32, new: u32) -> Option<SDHCTask> {
+    fn run_write_handler(&self, iface: &mut NewSDInterface, old: u32, new: u32) -> Option<SDHCTask> {
         let shift: usize;
         let mask: u32;
         if self.bytecount_of_reg() >= 4 {
@@ -270,7 +270,7 @@ impl SDRegisters {
         }
         None
     }
-    fn apply_response(&mut self, iface: &mut NewSDInterface, response: Response) {
+    fn apply_response(&self, iface: &mut NewSDInterface, response: Response) {
         match response {
             Response::Regular(r) => {
                 iface.raw_write(SDRegisters::Response.base_offset(), r & 0x7fff_ffff);
@@ -406,7 +406,7 @@ impl MmioDevice for NewSDInterface {
         debug!(target: "SDHC", "{:?}", &regs);
         //fixme: multiple tasks?
         let mut tasks = Vec::new();
-        for mut reg in regs {
+        for reg in regs {
             if let Some(task) = reg.run_write_handler(self, old, val) {
                 tasks.push(task);
             }
