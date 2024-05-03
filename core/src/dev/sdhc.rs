@@ -197,11 +197,11 @@ impl SDRegisters {
                 if old & 0xff00 != new & 0xff00 {
                     let x = card::Command::from(new);
                     dbg!(&x);
-                    let cmd = x.index;
+                    // let cmd = x.index;
                     if let Some(response) = iface.card.issue(x, iface.raw_read(SDRegisters::Argument.base_offset())){
                         self.apply_response(iface, response);
                     }
-                    if cmd != 55 { iface.cmd_complete(); }
+                    iface.cmd_complete();
                 }
             }
             SDRegisters::NormalIntStatus => {
@@ -367,8 +367,10 @@ impl NewSDInterface {
         let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
         const CMD_COMPLETE_MASK: u32 = 1;
         if signal & CMD_COMPLETE_MASK != 0 && status & CMD_COMPLETE_MASK != 0 {
-            self.setreg(SDRegisters::NormalIntStatus, 1); // command complete
-            self.setreg(SDRegisters::SlotIntStatus, 1);
+            let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
+            let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
+            self.setreg(SDRegisters::NormalIntStatus, nisr | 0x1); // command complete
+            self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
             warn!(target: "SDHC", "raising Cmd completet interrupt");
             return Some(SDHCTask::RaiseInt);
         }
