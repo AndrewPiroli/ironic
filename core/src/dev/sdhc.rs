@@ -339,8 +339,10 @@ impl NewSDInterface {
         if signal & INSERT_INT_MASK != 0 && status & INSERT_INT_MASK != 0 {
             let current_state = self.raw_read(SDRegisters::PresentState.base_offset());
             self.setreg(SDRegisters::PresentState, current_state | (1<<16) | (1<<17) | (1 << 18)); // card inserted
-            self.setreg(SDRegisters::NormalIntStatus, 1<<6); // card inserted interrupt
-            self.setreg(SDRegisters::SlotIntStatus, 1); // slot 1 interrupt flag
+            let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
+            let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
+            self.setreg(SDRegisters::NormalIntStatus, nisr | 0x1); // command complete
+            self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
             self.insert_raised = true;
             return Some(SDHCTask::RaiseInt);
         }
@@ -354,10 +356,12 @@ impl NewSDInterface {
         let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
         const CMD_COMPLETE_MASK: u32 = 1;
         if signal & CMD_COMPLETE_MASK != 0 && status & CMD_COMPLETE_MASK != 0 {
-            self.setreg(SDRegisters::NormalIntStatus, 1); // command complete
-            self.setreg(SDRegisters::SlotIntStatus, 1);
+            let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
+            let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
+            self.setreg(SDRegisters::NormalIntStatus, nisr | 0x1); // command complete
+            self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
             self.first_ack = true;
-            debug!(target: "SDHC", "Sending inital ack for card setup");
+            warn!(target: "SDHC", "Sending inital ack for card setup");
             return Some(SDHCTask::RaiseInt);
         }
         None

@@ -62,8 +62,8 @@ impl Card {
         }
     }
     fn cmd8(&mut self, argument: u32) -> Response {
-        // VHS Ok and echo back check pattern
-        Response::Regular((1<<9) | argument & 0x8)
+        // CMD8 echo back in response
+        Response::Regular(argument & 0xfff)
     }
 }
 
