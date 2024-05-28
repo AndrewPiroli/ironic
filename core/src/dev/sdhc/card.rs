@@ -68,6 +68,7 @@ impl Card {
             (false, 3) => { return Some(self.cmd3(argument)); },
             (false, 9) => { return Some(self.cmd9(argument)); },
             (false, 7) => { return self.cmd7(argument); },
+            (false, 16) => { return Some(self.cmd16(argument)); },
             (_, 55) => {
                 self.acmd = true;
                 return Some(Response::Regular(0));
@@ -129,6 +130,13 @@ impl Card {
             }
         }
         None
+    }
+    fn cmd16(&self, argument: u32) -> Response {
+        let mut response = (self.state.bits_for_card_status() as u32) << 9;
+        if argument != 512 {
+            response |= 1 << 29; // block len error
+        }
+        Response::Regular(response)
     }
 }
 
