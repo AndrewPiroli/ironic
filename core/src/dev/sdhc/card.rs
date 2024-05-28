@@ -46,6 +46,7 @@ pub(super) struct Card {
     backing_mem: Option<Vec<u8>>,
     acmd: bool,
     ocr: OcrReg,
+    cid: CidReg,
 }
 
 impl Card {
@@ -57,6 +58,7 @@ impl Card {
                 return Some(self.cmd8(argument));
             },
             (true, 41) => { return Some(self.acmd41(argument)); },
+            (false, 2) => { return Some(self.cmd2(argument)); },
             (_, 55) => {
                 self.acmd = true;
                 return Some(Response::Regular(0));
@@ -72,9 +74,13 @@ impl Card {
         self.state = CardState::Idle;
         Response::Regular(0)
     }
-    fn acmd41(&mut self, argument: u32) -> Response {
+    fn acmd41(&mut self, _argument: u32) -> Response {
         self.state = CardState::Ready;
         Response::Regular(dbg!(self.ocr.0))
+    }
+    fn cmd2(&mut self, _argument: u32) -> Response {
+        self.state = CardState::Ident;
+        Response::R2(self.cid.0)
     }
 }
 
@@ -91,6 +97,7 @@ pub(super) enum Response {
 enum CardState {
     Idle,
     Ready,
+    Ident,
 }
 impl Default for CardState {
     fn default() -> Self {
@@ -104,5 +111,19 @@ struct OcrReg(u32);
 impl Default for OcrReg {
     fn default() -> Self {
         Self((1 << 31 /* powerup complete */) | (1 << 30 /* High capacity card */) | (1 << 20 /* 3.3v */))
+    }
+}
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct CidReg(u128);
+
+impl Default for CidReg {
+    fn default() -> Self {
+        let man_id:u128 = 0xffff << 120;
+        let oid: u128 = (65 << 119) | (80 << 118); // AP
+        let pnm: u128 = (73 << 117) | (82 << 116) | (79 << 115) | (78 << 114) | (89 << 113);
+        let crc = 0; // FIXME !!
+        Self(man_id | oid | pnm | crc | 1)
     }
 }
