@@ -50,6 +50,7 @@ pub(super) struct Card {
     ocr: OcrReg,
     cid: CidReg,
     rca: Option<NonZeroU16>,
+    csd: CsdReg,
 }
 
 impl Card {
@@ -63,6 +64,7 @@ impl Card {
             (true, 41) => { return Some(self.acmd41(argument)); },
             (false, 2) => { return Some(self.cmd2(argument)); },
             (false, 3) => { return Some(self.cmd3(argument)); },
+            (false, 9) => { return Some(self.cmd9(argument)); },
             (_, 55) => {
                 self.acmd = true;
                 return Some(Response::Regular(0));
@@ -90,6 +92,9 @@ impl Card {
         self.state = CardState::Stby;
         self.rca = Some(NonZeroU16::new(0x4321).unwrap());
         Response::Regular((self.rca.unwrap().get() as u32) << 16 | self.state.bits_for_card_status() as u32)
+    }
+    fn cmd9(&mut self, _argument: u32) -> Response {
+        Response::R2(self.csd.0)
     }
 }
 
@@ -154,5 +159,27 @@ impl Default for CidReg {
         let pnm: u128 = (73 << 117) | (82 << 116) | (79 << 115) | (78 << 114) | (89 << 113);
         let crc = 0; // FIXME !!
         Self(man_id | oid | pnm | crc | 1)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct CsdReg(u128);
+
+impl Default for CsdReg {
+    fn default() -> Self {
+        let x =
+            (1 << 126) | //structure ver 2
+            (0xe << 112) | // TAAC fixed defintion
+            (0x32 << 96) | // trans speed for 25Mhz
+            (0b010110110101 << 84) | // command classes - mandatory only
+            (0x9 << 80) | // block len fixed to 512
+            (8191 << 48) | // (8191 + 1) * 512k = 4Gbyte card
+            (1 << 46) | // erase block en fixed
+            (0x7f << 39) | // sector size fixed
+            (0b10 << 26) | //write speed factor fixed
+            (9 << 22) | // write bl len fixed
+            (3 << 10) // file format other
+        ;
+        Self(x >> 8) /* mini is off, or we are - probably us!! */
     }
 }
