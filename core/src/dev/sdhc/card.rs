@@ -45,16 +45,18 @@ pub(super) struct Card {
     state: CardState,
     backing_mem: Option<Vec<u8>>,
     acmd: bool,
+    ocr: OcrReg,
 }
 
 impl Card {
     pub(super) fn issue(&mut self, cmd: Command, argument: u32) -> Option<Response> {
         let acmd = std::mem::replace(&mut self.acmd, false);
         match (acmd, cmd.index) {
-            (false, 0) => { return Some(self.cmd0(argument)); }
+            (false, 0) => { return Some(self.cmd0(argument)); },
             (false, 8) => {
                 return Some(self.cmd8(argument));
             },
+            (true, 41) => { return Some(self.acmd41(argument)); },
             (_, 55) => {
                 self.acmd = true;
                 return Some(Response::Regular(0));
@@ -70,6 +72,10 @@ impl Card {
         self.state = CardState::Idle;
         Response::Regular(0)
     }
+    fn acmd41(&mut self, argument: u32) -> Response {
+        self.state = CardState::Ready;
+        Response::Regular(dbg!(self.ocr.0))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -84,9 +90,19 @@ pub(super) enum Response {
 #[derive(Debug)]
 enum CardState {
     Idle,
+    Ready,
 }
 impl Default for CardState {
     fn default() -> Self {
         Self::Idle
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct OcrReg(u32);
+
+impl Default for OcrReg {
+    fn default() -> Self {
+        Self((1 << 31 /* powerup complete */) | (1 << 30 /* High capacity card */) | (1 << 20 /* 3.3v */))
     }
 }
