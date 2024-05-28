@@ -1,3 +1,6 @@
+use std::num::NonZeroU16;
+use log::debug;
+
 // type ResponseLength = u8;
 #[derive(Debug, Clone)]
 pub struct Command {
@@ -45,16 +48,27 @@ pub(super) struct Card {
     state: CardState,
     backing_mem: Option<Vec<u8>>,
     acmd: bool,
+    ocr: OcrReg,
+    cid: CidReg,
+    rca: Option<NonZeroU16>,
+    csd: CsdReg,
+    selected: bool,
 }
 
 impl Card {
     pub(super) fn issue(&mut self, cmd: Command, argument: u32) -> Option<Response> {
         let acmd = std::mem::replace(&mut self.acmd, false);
         match (acmd, cmd.index) {
-            (false, 0) => { return Some(self.cmd0(argument)); }
+            (false, 0) => { return Some(self.cmd0(argument)); },
             (false, 8) => {
                 return Some(self.cmd8(argument));
             },
+            (true, 41) => { return Some(self.acmd41(argument)); },
+            (false, 2) => { return Some(self.cmd2(argument)); },
+            (false, 3) => { return Some(self.cmd3(argument)); },
+            (false, 9) => { return Some(self.cmd9(argument)); },
+            (false, 7) => { return self.cmd7(argument); },
+            (false, 16) => { return Some(self.cmd16(argument)); },
             (_, 55) => {
                 self.acmd = true;
                 return Some(Response::Regular(0));
@@ -70,6 +84,60 @@ impl Card {
         self.state = CardState::Idle;
         Response::Regular(0)
     }
+    fn acmd41(&mut self, _argument: u32) -> Response {
+        self.state = CardState::Ready;
+        Response::Regular(dbg!(self.ocr.0))
+    }
+    fn cmd2(&mut self, _argument: u32) -> Response {
+        self.state = CardState::Ident;
+        Response::R2(self.cid.0)
+    }
+    fn cmd3(&mut self, _argument: u32) -> Response {
+        self.state = CardState::Stby;
+        self.rca = Some(NonZeroU16::new(0x4321).unwrap());
+        match self.rca {
+            Some(existing) => {
+                self.rca = Some(existing.checked_add(1).unwrap())
+            },
+            None => self.rca = Some(NonZeroU16::new(0x4321).unwrap()),
+        }
+        Response::Regular((self.rca.unwrap().get() as u32) << 16 | self.state.bits_for_card_status() as u32)
+    }
+    fn cmd9(&mut self, _argument: u32) -> Response {
+        Response::R2(self.csd.0)
+    }
+    fn cmd7(&mut self, argument: u32) -> Option<Response> {
+        let selected_addr = (argument >> 16) as u16;
+        if let Some(rca) = self.rca && selected_addr == rca.get() {
+            if self.state == CardState::Dis {
+                self.state = CardState::Prg;
+            }
+            else {
+                self.state = CardState::Trans;
+            }
+            debug!(target: "SDHC", "card selected");
+            self.selected = true;
+            return None;
+        }
+        else {
+            self.selected = false;
+            debug!(target: "SDHC", "card diselected");
+            if self.state == CardState::Prg {
+                self.state = CardState::Dis;
+            }
+            else {
+                self.state = CardState::Stby;
+            }
+        }
+        None
+    }
+    fn cmd16(&self, argument: u32) -> Response {
+        let mut response = (self.state.bits_for_card_status() as u32) << 9;
+        if argument != 512 {
+            response |= 1 << 29; // block len error
+        }
+        Response::Regular(response)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -81,12 +149,86 @@ pub(super) enum Response {
     R2(u128), // Part 1 [127:8] to Part 2 [119:0]
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 enum CardState {
     Idle,
+    Ready,
+    Ident,
+    Stby,
+    Trans,
+    Data,
+    Rcv,
+    Prg,
+    Dis,
+    Ina,
 }
 impl Default for CardState {
     fn default() -> Self {
         Self::Idle
+    }
+}
+impl CardState {
+    // Part1 simplified version 2 - Table 4-35
+    fn bits_for_card_status(&self) -> u8 {
+        match self {
+            Self::Idle => 0,
+            Self::Ready => 1,
+            Self::Ident => 2,
+            Self::Stby => 3,
+            Self::Trans => 4,
+            Self::Data => 5,
+            Self::Rcv => 6,
+            Self::Prg => 7,
+            Self::Dis => 8,
+            Self::Ina => panic!(),
+            // 9-14 reserved
+            // 15 reserved for io mode
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct OcrReg(u32);
+
+impl Default for OcrReg {
+    fn default() -> Self {
+        Self((1 << 31 /* powerup complete */) | (1 << 30 /* High capacity card */) | (1 << 20 /* 3.3v */))
+    }
+}
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct CidReg(u128);
+
+impl Default for CidReg {
+    fn default() -> Self {
+        let man_id:u128 = 0xffff << 120;
+        let oid: u128 = (65 << 119) | (80 << 118); // AP
+        let pnm: u128 = (73 << 117) | (82 << 116) | (79 << 115) | (78 << 114) | (89 << 113);
+        let crc = 0; // FIXME !!
+        Self(man_id | oid | pnm | crc | 1)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct CsdReg(u128);
+
+impl Default for CsdReg {
+    fn default() -> Self {
+        let x =
+            (1 << 126) | //structure ver 2
+            (0xe << 112) | // TAAC fixed defintion
+            (0x32 << 96) | // trans speed for 25Mhz
+            (0b010110110101 << 84) | // command classes - mandatory only
+            (0x9 << 80) | // block len fixed to 512
+            (8191 << 48) | // (8191 + 1) * 512k = 4Gbyte card
+            (1 << 46) | // erase block en fixed
+            (0x7f << 39) | // sector size fixed
+            (0b10 << 26) | //write speed factor fixed
+            (9 << 22) | // write bl len fixed
+            (3 << 10) // file format other
+        ;
+        Self(x >> 8) /* mini is off, or we are - probably us!! */
     }
 }

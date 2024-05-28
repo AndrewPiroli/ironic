@@ -279,6 +279,12 @@ impl SDRegisters {
             Response::Regular(r) => {
                 iface.raw_write(SDRegisters::Response.base_offset(), r);
             },
+            Response::R2(r) => {
+                iface.raw_write(SDRegisters::Response.base_offset(),      ((r >> 00) & 0xffff_ffff) as u32);
+                iface.raw_write(SDRegisters::Response.base_offset() + 04, ((r >> 32) & 0xffff_ffff) as u32);
+                iface.raw_write(SDRegisters::Response.base_offset() + 08, ((r >> 64) & 0xffff_ffff) as u32);
+                iface.raw_write(SDRegisters::Response.base_offset() + 12, ((r >> 96) & 0xffff_ffff) as u32);
+            }
             _ => unimplemented!(),
         }
     }
