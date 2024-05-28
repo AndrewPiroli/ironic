@@ -256,6 +256,7 @@ impl SDRegisters {
                 }
                 else { unimplemented!("DAT and CMD line resets"); }
             },
+            SDRegisters::BlockSize |
             SDRegisters::Argument |
             SDRegisters::ErrorIntStatusEnable |
             SDRegisters::ErrorIntSignalEnable |
