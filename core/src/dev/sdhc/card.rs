@@ -1,3 +1,5 @@
+use std::num::NonZeroU16;
+
 // type ResponseLength = u8;
 #[derive(Debug, Clone)]
 pub struct Command {
@@ -47,6 +49,7 @@ pub(super) struct Card {
     acmd: bool,
     ocr: OcrReg,
     cid: CidReg,
+    rca: Option<NonZeroU16>,
 }
 
 impl Card {
@@ -59,6 +62,7 @@ impl Card {
             },
             (true, 41) => { return Some(self.acmd41(argument)); },
             (false, 2) => { return Some(self.cmd2(argument)); },
+            (false, 3) => { return Some(self.cmd3(argument)); },
             (_, 55) => {
                 self.acmd = true;
                 return Some(Response::Regular(0));
@@ -82,6 +86,11 @@ impl Card {
         self.state = CardState::Ident;
         Response::R2(self.cid.0)
     }
+    fn cmd3(&mut self, _argument: u32) -> Response {
+        self.state = CardState::Stby;
+        self.rca = Some(NonZeroU16::new(0x4321).unwrap());
+        Response::Regular((self.rca.unwrap().get() as u32) << 16 | self.state.bits_for_card_status() as u32)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -93,15 +102,35 @@ pub(super) enum Response {
     R2(u128), // Part 1 [127:8] to Part 2 [119:0]
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 enum CardState {
     Idle,
     Ready,
     Ident,
+    Stby,
 }
 impl Default for CardState {
     fn default() -> Self {
         Self::Idle
+    }
+}
+impl CardState {
+    // Part1 simplified version 2 - Table 4-35
+    fn bits_for_card_status(&self) -> u8 {
+        match self {
+            Self::Idle => 0,
+            Self::Ready => 1,
+            Self::Ident => 2,
+            Self::Stby => 3,
+            // 4 trans
+            // 5 data
+            // 6 rcv
+            // 7 prg
+            // 8 dis
+            // 9-14 reserved
+            // 15 reserved for io mode
+        }
     }
 }
 
