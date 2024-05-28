@@ -15,6 +15,7 @@ pub fn svc(_cpu: &mut Cpu, _op: MiscBits) -> DispatchRes {
 /// fd = cpu debug print on
 /// fc = cpu debug print off
 /// fb = dump RAM and continue
+/// fa = print cycle
 /// All other values, store in scratch reg and wait for debugger
 pub fn bkpt(cpu: &mut Cpu, op: MiscBits) -> DispatchRes {
     let cmd = op.imm8() as u8;
@@ -40,6 +41,9 @@ pub fn bkpt(cpu: &mut Cpu, op: MiscBits) -> DispatchRes {
                 },
                 Err(e) => { return DispatchRes::FatalErr(e); }
             }
+        },
+        0xfa => {
+            dbg!(cpu.bus.read().cycle);
         },
         _      => {},
     }

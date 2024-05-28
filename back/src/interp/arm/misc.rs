@@ -11,6 +11,7 @@ use anyhow::anyhow;
 /// fd = cpu debug print on
 /// fc = cpu debug print off
 /// fb = dump RAM and continue
+/// fa = print cycle
 /// All other values, store in scratch reg and wait for debugger
 pub fn bkpt(cpu: &mut Cpu, op: BkptBits) -> DispatchRes {
     let cmd = op.imm16() as u16;
@@ -36,6 +37,9 @@ pub fn bkpt(cpu: &mut Cpu, op: BkptBits) -> DispatchRes {
                 },
                 Err(e) => { return DispatchRes::FatalErr(e); }
             }
+        },
+        0xfa => {
+            dbg!(cpu.bus.read().cycle);
         },
         _      => {},
     }
