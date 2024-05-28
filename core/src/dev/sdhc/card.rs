@@ -51,6 +51,7 @@ impl Card {
     pub(super) fn issue(&mut self, cmd: Command, argument: u32) -> Option<Response> {
         let acmd = std::mem::replace(&mut self.acmd, false);
         match (acmd, cmd.index) {
+            (false, 0) => { return Some(self.cmd0(argument)); }
             (false, 8) => {
                 return Some(self.cmd8(argument));
             },
@@ -64,6 +65,10 @@ impl Card {
     fn cmd8(&mut self, argument: u32) -> Response {
         // CMD8 echo back in response
         Response::Regular(argument & 0xfff)
+    }
+    fn cmd0(&mut self, _argument: u32) -> Response {
+        self.state = CardState::Idle;
+        Response::Regular(0)
     }
 }
 

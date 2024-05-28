@@ -172,6 +172,7 @@ impl SDRegisters {
     // The normal old != new check is not enough
     fn must_always_handle_writes(&self) -> bool {
         match self {
+            SDRegisters::Command |
             SDRegisters::NormalIntStatus |
             SDRegisters::ErrorIntStatus => true,
             _ => false,
@@ -194,15 +195,13 @@ impl SDRegisters {
         debug!(target: "SDHC", "write handler for {self:?} {old:x} {new:x}");
         match self {
             SDRegisters::Command => {
-                if old & 0xff00 != new & 0xff00 {
-                    let x = card::Command::from(new);
-                    dbg!(&x);
-                    // let cmd = x.index;
-                    if let Some(response) = iface.card.issue(x, iface.raw_read(SDRegisters::Argument.base_offset())){
-                        self.apply_response(iface, response);
-                    }
-                    iface.cmd_complete();
+                let x = card::Command::from(new);
+                dbg!(&x);
+                // let cmd = x.index;
+                if let Some(response) = iface.card.issue(x, iface.raw_read(SDRegisters::Argument.base_offset())){
+                    self.apply_response(iface, response);
                 }
+                iface.cmd_complete();
             }
             SDRegisters::NormalIntStatus => {
                 const RW1C_MASK: u32 = 0x1ff; // mask of the bits that are rw1c, all others are reserved or ROC.
