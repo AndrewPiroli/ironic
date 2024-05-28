@@ -42,9 +42,6 @@ pub fn bkpt(cpu: &mut Cpu, op: MiscBits) -> DispatchRes {
                 Err(e) => { return DispatchRes::FatalErr(e); }
             }
         },
-        0xfa => {
-            dbg!(cpu.bus.read().cycle);
-        },
         _      => {},
     }
     cpu.scratch = cmd as u32;
