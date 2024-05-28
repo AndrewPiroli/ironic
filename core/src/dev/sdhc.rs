@@ -388,7 +388,8 @@ impl Default for NewSDInterface {
         let mut new = Self { register_file: [0;256], insert_raised: false, first_ack: false, card: Card::default() };
         // Fill HWInit registers
         // Advertise 3.3v support in Capabilities Register
-        new.raw_write(SDRegisters::Capabilities.base_offset(), 1 << 24);
+        // Advertise 10Mhz base clock
+        new.raw_write(SDRegisters::Capabilities.base_offset(), 1 << 24 | (10 <<8));
         // Advertise the maximum current capability for 3.3v
         new.raw_write(SDRegisters::MaxCurrentCapabilities.base_offset(), 0xff);
         // End HWInit Registers
