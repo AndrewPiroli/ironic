@@ -1,4 +1,5 @@
 use std::num::NonZeroU16;
+use log::debug;
 
 // type ResponseLength = u8;
 #[derive(Debug, Clone)]
@@ -51,6 +52,7 @@ pub(super) struct Card {
     cid: CidReg,
     rca: Option<NonZeroU16>,
     csd: CsdReg,
+    selected: bool,
 }
 
 impl Card {
@@ -65,6 +67,7 @@ impl Card {
             (false, 2) => { return Some(self.cmd2(argument)); },
             (false, 3) => { return Some(self.cmd3(argument)); },
             (false, 9) => { return Some(self.cmd9(argument)); },
+            (false, 7) => { return self.cmd7(argument); },
             (_, 55) => {
                 self.acmd = true;
                 return Some(Response::Regular(0));
@@ -91,10 +94,41 @@ impl Card {
     fn cmd3(&mut self, _argument: u32) -> Response {
         self.state = CardState::Stby;
         self.rca = Some(NonZeroU16::new(0x4321).unwrap());
+        match self.rca {
+            Some(existing) => {
+                self.rca = Some(existing.checked_add(1).unwrap())
+            },
+            None => self.rca = Some(NonZeroU16::new(0x4321).unwrap()),
+        }
         Response::Regular((self.rca.unwrap().get() as u32) << 16 | self.state.bits_for_card_status() as u32)
     }
     fn cmd9(&mut self, _argument: u32) -> Response {
         Response::R2(self.csd.0)
+    }
+    fn cmd7(&mut self, argument: u32) -> Option<Response> {
+        let selected_addr = (argument >> 16) as u16;
+        if let Some(rca) = self.rca && selected_addr == rca.get() {
+            if self.state == CardState::Dis {
+                self.state = CardState::Prg;
+            }
+            else {
+                self.state = CardState::Trans;
+            }
+            debug!(target: "SDHC", "card selected");
+            self.selected = true;
+            return None;
+        }
+        else {
+            self.selected = false;
+            debug!(target: "SDHC", "card diselected");
+            if self.state == CardState::Prg {
+                self.state = CardState::Dis;
+            }
+            else {
+                self.state = CardState::Stby;
+            }
+        }
+        None
     }
 }
 
@@ -114,6 +148,12 @@ enum CardState {
     Ready,
     Ident,
     Stby,
+    Trans,
+    Data,
+    Rcv,
+    Prg,
+    Dis,
+    Ina,
 }
 impl Default for CardState {
     fn default() -> Self {
@@ -128,11 +168,12 @@ impl CardState {
             Self::Ready => 1,
             Self::Ident => 2,
             Self::Stby => 3,
-            // 4 trans
-            // 5 data
-            // 6 rcv
-            // 7 prg
-            // 8 dis
+            Self::Trans => 4,
+            Self::Data => 5,
+            Self::Rcv => 6,
+            Self::Prg => 7,
+            Self::Dis => 8,
+            Self::Ina => panic!(),
             // 9-14 reserved
             // 15 reserved for io mode
         }
