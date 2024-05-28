@@ -275,7 +275,7 @@ impl SDRegisters {
     fn apply_response(&self, iface: &mut NewSDInterface, response: Response) {
         match response {
             Response::Regular(r) => {
-                iface.raw_write(SDRegisters::Response.base_offset(), r & 0x7fff_ffff);
+                iface.raw_write(SDRegisters::Response.base_offset(), r);
             },
             _ => unimplemented!(),
         }
