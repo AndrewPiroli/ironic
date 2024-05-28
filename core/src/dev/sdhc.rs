@@ -201,7 +201,9 @@ impl SDRegisters {
                 if let Some(response) = iface.card.issue(x, iface.raw_read(SDRegisters::Argument.base_offset())){
                     self.apply_response(iface, response);
                 }
-                iface.cmd_complete();
+                if let Some(task) = iface.cmd_complete() {
+                    return Some(task);
+                }
             }
             SDRegisters::NormalIntStatus => {
                 const RW1C_MASK: u32 = 0x1ff; // mask of the bits that are rw1c, all others are reserved or ROC.
