@@ -420,7 +420,8 @@ impl NewSDInterface {
         // 25
         let blocks_remaining = self.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16; // p83
         if blocks_remaining > 0 {
-            // xxxx
+            // tell card it's rw_stop
+            self.card.rw_stop = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) + (blocks_remaining as usize *512);
         }
         else {
             error!("asdf");
@@ -452,6 +453,8 @@ impl NewSDInterface {
             CardTXStatus::None |
             CardTXStatus::MutliReadPending => {unimplemented!()},
             CardTXStatus::MultiReadInProgress => {
+                // Clear Block Count Register
+                self.setreg(SDRegisters::BlockCount, 0);
                 // clear PS Buffer read enable & Read Tx Active
                 let ps = self.raw_read(SDRegisters::PresentState.base_offset());
                 const KILL_MASK: u32 = !(1<<11 | 1<<9);
@@ -496,23 +499,19 @@ impl MmioDevice for NewSDInterface {
                 CardTXStatus::None |
                 CardTXStatus::MutliReadPending => {}
                 CardTXStatus::MultiReadInProgress => {
-                    error!("JAJAJJA");
                     let index = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
-                    if let Some(v) = self.card.backing_mem.as_ref() {
-                        if v.len() < index+4 || index+4 > self.card.rw_stop {
-                            return Err(anyhow!("out of range!"));
+                    {
+                        let v = self.card.backing_mem.lock();
+                        if v.data.len() < index+4 || index+4 > self.card.rw_stop {
+                            return Err(anyhow!("out of range! {index:?} {:?} {} ", v.data.len(), self.card.rw_stop));
                         }
-                        let val: [u8;4 ] = v[index..index+4].try_into().unwrap();
-                        let val = u32::from_ne_bytes(val);
                         self.card.rw_index.store(index+4, std::sync::atomic::Ordering::Relaxed);
-                        return Ok(BusPacket::Word(val));
-                    }
-                    else {
-                        return Err(anyhow!("no backing mem"));
+                        let ret: u32 = v.read(index).unwrap();
+                        println!("{index:08x} {ret:08x}");
+                        return Ok(BusPacket::Word(ret));
                     }
                 },
             }
-
         }
         Ok(BusPacket::Word(self.raw_read(off)))
     }
