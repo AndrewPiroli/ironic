@@ -15,6 +15,7 @@ use card::*;
 #[derive(Debug)]
 pub enum SDHCTask {
     RaiseInt,
+    SendBufReadReady,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -211,6 +212,10 @@ impl SDRegisters {
                 let new = (old & !RW1C_MASK) | clearbits;
                 println!("normalintstatus {old:b} {new:b}");
                 iface.setreg(*self, new);
+                // It's convient to kick certain things off here because we have mut access... p83
+                if iface.tx_status == CardTXStatus::MutliReadPending && clearbits & 1 == 1 {
+                    return Some(SDHCTask::SendBufReadReady);
+                }
             },
             SDRegisters::ErrorIntStatus => {
                 const RW1C_MASK: u32 = 0xf1ff; // mask of the bits that are rw1c, all others are reserved or ROC.
@@ -290,12 +295,20 @@ impl SDRegisters {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CardTXStatus {
+    None,
+    MutliReadPending,
+    MultiReadInProgress,
+}
+
 #[repr(C, align(64))]
 pub struct NewSDInterface {
     register_file: [u8; 256],
     insert_raised: bool,
     first_ack: bool,
     card: Card,
+    tx_status: CardTXStatus,
 }
 
 impl NewSDInterface {
@@ -390,11 +403,18 @@ impl NewSDInterface {
         }
         None
     }
+    fn buffer_ready_read(&mut self) {
+        // check blocks remaining
+        // pull data from card
+        // setup Buf Ready Read Int
+        // if no more blocks defer a tx complete int
+        todo!()
+    }
 }
 
 impl Default for NewSDInterface {
     fn default() -> Self {
-        let mut new = Self { register_file: [0;256], insert_raised: false, first_ack: false, card: Card::default() };
+        let mut new = Self { register_file: [0;256], insert_raised: false, first_ack: false, card: Card::default(), tx_status: CardTXStatus::None };
         // Fill HWInit registers
         // Advertise 3.3v support in Capabilities Register
         // Advertise 10Mhz base clock
@@ -470,6 +490,10 @@ impl Bus {
                 debug!(target: "SDHC", "Raising SDHC interrupt.");
                 self.hlwd.irq.assert(HollywoodIrq::Sdhc);
             },
+            SDHCTask::SendBufReadReady => {
+                self.sd0.buffer_ready_read();
+                //self.hlwd.irq.assert(HollywoodIrq::Sdhc);
+            }
         }
     }
 }
