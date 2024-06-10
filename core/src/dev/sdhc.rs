@@ -1,5 +1,6 @@
 pub(crate) mod card;
 
+use anyhow::anyhow;
 use anyhow::bail;
 use log::debug;
 use log::error;
@@ -16,6 +17,7 @@ use card::*;
 pub enum SDHCTask {
     RaiseInt,
     SendBufReadReady,
+    IOPoll,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -209,12 +211,17 @@ impl SDRegisters {
             SDRegisters::NormalIntStatus => {
                 const RW1C_MASK: u32 = 0x1ff; // mask of the bits that are rw1c, all others are reserved or ROC.
                 let clearbits = (old & RW1C_MASK) ^ (new & RW1C_MASK);
-                let new = (old & !RW1C_MASK) | clearbits;
-                println!("normalintstatus {old:b} {new:b}");
-                iface.setreg(*self, new);
+                let int_new = (old & !RW1C_MASK) | clearbits;
+                println!("normalintstatus {old:b} {int_new:b}");
+                iface.setreg(*self, int_new);
                 // It's convient to kick certain things off here because we have mut access... p83
-                if iface.tx_status == CardTXStatus::MutliReadPending && clearbits & 1 == 1 {
+                if iface.card.tx_status == CardTXStatus::MutliReadPending && (new & 1 == 1) {
+                    iface.card.tx_status = CardTXStatus::MultiReadInProgress;
+                    dbg!();
                     return Some(SDHCTask::SendBufReadReady);
+                }
+                else {
+                    dbg!(clearbits);
                 }
             },
             SDRegisters::ErrorIntStatus => {
@@ -300,6 +307,12 @@ enum CardTXStatus {
     None,
     MutliReadPending,
     MultiReadInProgress,
+}
+
+impl Default for CardTXStatus {
+    fn default() -> Self {
+        Self::None
+    }
 }
 
 #[repr(C, align(64))]
@@ -403,12 +416,58 @@ impl NewSDInterface {
         }
         None
     }
-    fn buffer_ready_read(&mut self) {
-        // check blocks remaining
-        // pull data from card
-        // setup Buf Ready Read Int
-        // if no more blocks defer a tx complete int
-        todo!()
+    fn buffer_ready_read(&mut self) -> bool {
+        // 25
+        let blocks_remaining = self.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16; // p83
+        if blocks_remaining > 0 {
+            // xxxx
+        }
+        else {
+            error!("asdf");
+            return false;
+        }
+        error!(target: "SDHC", "buffer read ready");
+        // Present State Buffer Read Enable (11) & Read Tx Active (9)
+        let ps = self.raw_read(SDRegisters::PresentState.base_offset());
+        self.setreg(SDRegisters::PresentState, ps | 1<<11 | 1<<9);
+        // Set Buffer Read Ready Int
+        let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
+        let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
+        const BUFFER_READ_READY_MASK: u32 = 1 << 5;
+        if signal & BUFFER_READ_READY_MASK != 0 && status & BUFFER_READ_READY_MASK != 0 {
+            let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
+            let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
+            self.setreg(SDRegisters::NormalIntStatus, nisr | BUFFER_READ_READY_MASK);
+            self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
+        }
+        else {
+            error!("fdsfasd");
+            return false;
+        }
+        true
+    }
+    fn tx_complete(&mut self) {
+        error!("TX COMPLETE"); // to early reeee
+        match self.card.tx_status {
+            CardTXStatus::None |
+            CardTXStatus::MutliReadPending => {unimplemented!()},
+            CardTXStatus::MultiReadInProgress => {
+                // clear PS Buffer read enable & Read Tx Active
+                let ps = self.raw_read(SDRegisters::PresentState.base_offset());
+                const KILL_MASK: u32 = !(1<<11 | 1<<9);
+                self.setreg(SDRegisters::PresentState, ps & KILL_MASK);
+                let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
+                let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
+                const TRANSFER_COMPLETE_MASK: u32 = 1 << 1;
+                if signal & TRANSFER_COMPLETE_MASK != 0 && status & TRANSFER_COMPLETE_MASK != 0 {
+                    let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
+                    let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
+                    self.setreg(SDRegisters::NormalIntStatus, nisr | TRANSFER_COMPLETE_MASK);
+                    self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
+                }
+                self.card.tx_status = CardTXStatus::None;
+            },
+        }
     }
 }
 
@@ -432,6 +491,29 @@ impl MmioDevice for NewSDInterface {
 
     fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
         debug!(target: "SDHC", "MMIO read: 0x{off:x}");
+        if off == SDRegisters::BufferDataPort.base_offset() {
+            match self.card.tx_status {
+                CardTXStatus::None |
+                CardTXStatus::MutliReadPending => {}
+                CardTXStatus::MultiReadInProgress => {
+                    error!("JAJAJJA");
+                    let index = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
+                    if let Some(v) = self.card.backing_mem.as_ref() {
+                        if v.len() < index+4 || index+4 > self.card.rw_stop {
+                            return Err(anyhow!("out of range!"));
+                        }
+                        let val: [u8;4 ] = v[index..index+4].try_into().unwrap();
+                        let val = u32::from_ne_bytes(val);
+                        self.card.rw_index.store(index+4, std::sync::atomic::Ordering::Relaxed);
+                        return Ok(BusPacket::Word(val));
+                    }
+                    else {
+                        return Err(anyhow!("no backing mem"));
+                    }
+                },
+            }
+
+        }
         Ok(BusPacket::Word(self.raw_read(off)))
     }
 
@@ -491,8 +573,35 @@ impl Bus {
                 self.hlwd.irq.assert(HollywoodIrq::Sdhc);
             },
             SDHCTask::SendBufReadReady => {
-                self.sd0.buffer_ready_read();
-                //self.hlwd.irq.assert(HollywoodIrq::Sdhc);
+                match self.sd0.buffer_ready_read() {
+                    true => {
+                        self.tasks.push(
+                            Task { kind: BusTask::SDHC(SDHCTask::IOPoll), target_cycle: self.cycle+10000 }
+                        );
+                        self.hlwd.irq.assert(HollywoodIrq::Sdhc);
+                    },
+                    false => {
+                        unimplemented!();
+                    },
+                }
+            },
+            SDHCTask::IOPoll => {
+                trace!(target: "Other", "SDHC IOPOLL");
+                match self.sd0.card.tx_status {
+                    CardTXStatus::None |
+                    CardTXStatus::MutliReadPending => {},
+                    CardTXStatus::MultiReadInProgress => {
+                        if self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) >= self.sd0.card.rw_stop {
+                            self.sd0.tx_complete();
+                            self.hlwd.irq.assert(HollywoodIrq::Sdhc);
+                        }
+                        else {
+                            self.tasks.push(
+                                Task { kind: BusTask::SDHC(SDHCTask::IOPoll), target_cycle: self.cycle+10000 }
+                            );
+                        }
+                    },
+                }
             }
         }
     }

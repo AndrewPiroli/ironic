@@ -1,5 +1,7 @@
-use std::num::NonZeroU16;
+use std::{num::NonZeroU16, sync::atomic::AtomicUsize};
 use log::debug;
+
+use super::CardTXStatus;
 
 // type ResponseLength = u8;
 #[derive(Debug, Clone)]
@@ -46,13 +48,16 @@ impl CommandType {
 #[derive(Debug, Default)]
 pub(super) struct Card {
     state: CardState,
-    backing_mem: Option<Vec<u8>>,
+    pub backing_mem: Option<Vec<u8>>,
     acmd: bool,
     ocr: OcrReg,
     cid: CidReg,
     rca: Option<NonZeroU16>,
     csd: CsdReg,
     selected: bool,
+    pub rw_index: AtomicUsize,
+    pub rw_stop: usize,
+    pub tx_status: CardTXStatus,
 }
 
 impl Card {
@@ -69,6 +74,7 @@ impl Card {
             (false, 9) => { return Some(self.cmd9(argument)); },
             (false, 7) => { return self.cmd7(argument); },
             (false, 16) => { return Some(self.cmd16(argument)); },
+            (false, 18) => { return Some(self.cmd18(argument)); }
             (_, 55) => {
                 self.acmd = true;
                 return Some(Response::Regular(0));
@@ -136,6 +142,14 @@ impl Card {
         if argument != 512 {
             response |= 1 << 29; // block len error
         }
+        Response::Regular(response)
+    }
+    fn cmd18(&mut self, argument: u32) -> Response {
+        log::error!(target: "SDHC", "FIXME FIXME FIXME - backing_mem initialization");
+        self.backing_mem = Some(Vec::with_capacity(10000));
+        self.backing_mem.as_mut().unwrap().resize_with(10000, Default::default);
+        let response = (self.state.bits_for_card_status() as u32) << 9;
+        self.tx_status = CardTXStatus::MutliReadPending;
         Response::Regular(response)
     }
 }
