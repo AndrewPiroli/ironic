@@ -165,6 +165,7 @@ impl Card {
         Response::Regular(response)
     }
     fn cmd18(&mut self, argument: u32) -> Response {
+        log::error!(target: "SDHC", "{}", argument * 512);
         self.rw_index.store(argument as usize * 512 , std::sync::atomic::Ordering::Relaxed);
         // log::error!(target: "SDHC", "FIXME FIXME FIXME - backing_mem initialization");
         

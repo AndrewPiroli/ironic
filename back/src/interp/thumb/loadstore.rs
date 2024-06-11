@@ -260,6 +260,7 @@ pub fn stm(cpu: &mut Cpu, op: LoadStoreMultiBits) -> DispatchRes {
 }
 
 pub fn push(cpu: &mut Cpu, op: PushBits) -> DispatchRes {
+    let dbg = false ; //op.0 == 0xb5f0;
     let num_regs = if op.m() {
         op.register_list().count_ones() + 1
     } else {
@@ -269,6 +270,11 @@ pub fn push(cpu: &mut Cpu, op: PushBits) -> DispatchRes {
     let start_addr = cpu.reg[Reg::Sp] - (4 * num_regs);
     let end_addr = cpu.reg[Reg::Sp] - 4;
     let mut addr = start_addr;
+    if dbg {
+        dbg!(start_addr);
+        dbg!(end_addr);
+        dbg!(addr);
+    }
     for i in 0..8 {
         if (op.register_list() & (1 << i)) != 0 {
             match cpu.write32(addr, cpu.reg[i as u32]) {
@@ -276,6 +282,9 @@ pub fn push(cpu: &mut Cpu, op: PushBits) -> DispatchRes {
                 Err(reason) => {return DispatchRes::FatalErr(reason) }
             };
             addr += 4;
+            if dbg {
+                dbg!(addr);
+            }
         }
     }
     if op.m() {
@@ -284,6 +293,9 @@ pub fn push(cpu: &mut Cpu, op: PushBits) -> DispatchRes {
             Err(reason) => { return DispatchRes::FatalErr(reason); }
         };
         addr += 4;
+        if dbg {
+            dbg!(addr);
+        }
     }
     assert!(end_addr == addr - 4);
     cpu.reg[Reg::Sp] = start_addr;

@@ -1,3 +1,4 @@
+use ironic_core::cpu::reg::Reg;
 use ironic_core::cpu::Cpu;
 use ironic_core::cpu::excep::ExceptionType;
 use log::{debug, info};
@@ -37,6 +38,9 @@ pub fn bkpt(cpu: &mut Cpu, op: BkptBits) -> DispatchRes {
                 },
                 Err(e) => { return DispatchRes::FatalErr(e); }
             }
+        },
+        0xfa => {
+            println!("AP DBG internal {:?}", cpu.reg);
         },
         _      => {},
     }
