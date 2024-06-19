@@ -18,3 +18,4 @@ bincode = { version = "~2.0.0-rc.3" }
 lz4_flex = { version = "~0.11.1", default-features = false, features = ["std", "safe-encode", "safe-decode", "frame"] }
 iset = { version = "~0.2.2", default-features = false }
 parking_lot = { version = "~0.12.1", default-features = false, features = ["nightly", "hardware-lock-elision"] }
+memmap = { package = "memmap2", version = "0.9.4" }

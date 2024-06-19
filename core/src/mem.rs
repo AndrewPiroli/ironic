@@ -7,6 +7,8 @@ use std::io::Write;
 use std::mem;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
+use std::ops::{Deref, DerefMut};
+use memmap::{MmapMut, MmapOptions};
 
 use iset::IntervalMap;
 use anyhow::{bail, Context};
@@ -15,11 +17,42 @@ use bincode::{config, Decode, Encode};
 
 use crate::bus::prim::AccessWidth;
 
+/// The real backing memory, either a Vec, or a memory mapped file
+pub enum BackingMem {
+    Local(Vec<u8>),
+    Mapped(MmapMut),
+}
+impl Deref for BackingMem {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            BackingMem::Local(v) => v.deref(),
+            BackingMem::Mapped(m) => m.deref(),
+        }
+    }
+}
+impl DerefMut for BackingMem {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            BackingMem::Local(v) => v.deref_mut(),
+            BackingMem::Mapped(m) => m.deref_mut(),
+        }
+    }
+}
+impl BackingMem {
+    pub fn as_slice(&self) -> &[u8] {
+        match self {
+            BackingMem::Local(v) => v.as_slice(),
+            BackingMem::Mapped(m) => m.deref(),
+        }
+    }
+}
 
 /// An abstract, generic memory device.
 pub struct BigEndianMemory {
     /// Vector of bytes with the contents of this memory device.
-    pub data: Vec<u8>,
+    pub data: BackingMem,
     /// Hash of initial data (used for write tracking)
     hash: u32,
     /// Holds all writes so they can be replayed next time the emulator launches
@@ -31,15 +64,22 @@ pub struct BigEndianMemory {
 impl BigEndianMemory {
     pub fn new(len: usize, init_fn: Option<&str>, track_writes: bool) -> anyhow::Result<Self> {
         let hash: u32;
-        let data = if let Some(filename) = init_fn {
+        let data = if let Some(filename) = init_fn { unsafe {
             let mut f = File::open(filename)?;
-            let mut data = vec![0u8; len];
-            let _ = f.read(&mut data)?; // ignore partial read
-            hash = crc32fast::hash(&data);
-            data
-        } else {
+            if let Ok(map) = MmapOptions::new().map_copy(&f) {
+                hash = crc32fast::hash(&*map);
+                BackingMem::Mapped(map)
+            }
+            else {
+                error!(target: "Other", "mmaping {filename} failed, falling back to copy");
+                let mut data = vec![0u8; len];
+                let _ = f.read(&mut data)?; // ignore partial read
+                hash = crc32fast::hash(&data);
+                BackingMem::Local(data)
+            }
+        }} else {
             hash = 0xDEADC0DE;
-            vec![0u8; len]
+            BackingMem::Local(vec![0u8; len])
         };
         let writes: Option<IntervalMap<usize, Vec<u8>>> = if track_writes {
             debug!(target: "MEMSAVE", "BEMemory: Writes Enabled, hash: {hash}");
