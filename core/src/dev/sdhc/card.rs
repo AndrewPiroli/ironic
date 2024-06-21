@@ -112,7 +112,7 @@ impl Card {
     }
     fn acmd41(&mut self, _argument: u32) -> Response {
         self.state = CardState::Ready;
-        Response::Regular(dbg!(self.ocr.0))
+        Response::Regular(self.ocr.0)
     }
     fn cmd2(&mut self, _argument: u32) -> Response {
         self.state = CardState::Ident;
@@ -166,12 +166,8 @@ impl Card {
     }
     fn cmd18(&mut self, argument: u32) -> Response {
         self.rw_index.store(argument as usize * 512 , std::sync::atomic::Ordering::Relaxed);
-        // log::error!(target: "SDHC", "FIXME FIXME FIXME - backing_mem initialization");
-        
-        // self.backing_mem = Some(std::fs::read("test.fat").unwrap());
-        // self.backing_mem.as_mut().unwrap().resize_with(10000, Default::default);
         let response = (self.state.bits_for_card_status() as u32) << 9;
-        self.tx_status = CardTXStatus::MutliReadPending;
+        self.tx_status = CardTXStatus::MultiReadPending;
         Response::Regular(response)
     }
 }
