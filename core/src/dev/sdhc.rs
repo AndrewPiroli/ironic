@@ -507,7 +507,7 @@ impl MmioDevice for NewSDInterface {
                         }
                         self.card.rw_index.store(index+4, std::sync::atomic::Ordering::Relaxed);
                         let ret: u32 = v.read(index).unwrap();
-                        println!("{index:08x} {ret:08x}");
+                        //println!("{index:08x} {ret:08x}");
                         return Ok(BusPacket::Word(ret));
                     }
                 },
