@@ -18,6 +18,7 @@ use card::*;
 pub enum SDHCTask {
     RaiseInt,
     SendBufReadReady,
+    SendBufWriteReady,
     IOPoll,
 }
 
@@ -60,9 +61,7 @@ impl SDRegisters {
         for reg in (off..off+4).filter_map(Self::reg_from_offset) {
             // is this a large (32bit +) register?
             if reg.bytecount_of_reg() >= 4 {
-                // yes, we're done
-                // NOTE: no need to check must_always_handle_writes because there are no 32-bit+ registers with this property
-                if old != new {
+                if old != new || reg.must_always_handle_writes() {
                     ret.push(reg);
                 }
                 return ret;
@@ -176,6 +175,7 @@ impl SDRegisters {
     // The normal old != new check is not enough
     fn must_always_handle_writes(&self) -> bool {
         match self {
+            SDRegisters::BufferDataPort |
             SDRegisters::Command |
             SDRegisters::NormalIntStatus |
             SDRegisters::ErrorIntStatus => true,
@@ -217,10 +217,25 @@ impl SDRegisters {
                 let int_new = (old & !RW1C_MASK) | clearbits;
                 debug!(target: "SDHC", "normalintstatus {old:b} {int_new:b}");
                 iface.setreg(*self, int_new);
-                // It's convient to kick certain things off here because we have mut access... p83
-                if iface.card.tx_status == CardTXStatus::MultiReadPending && (new & 1 == 1) {
-                    iface.card.tx_status = CardTXStatus::MultiReadInProgress;
-                    return Some(SDHCTask::SendBufReadReady);
+                // The host driver will write here to acknowledge a CMD complete
+                // If there is a pending transfer that's supposed to be associated with that command
+                // This is the time to kick it off.
+                match iface.card.tx_status {
+                    CardTXStatus::MultiReadPending => { // Multi Block Read
+                        if new & 1 == 1 {
+                            iface.card.tx_status = CardTXStatus::MultiReadInProgress;
+                            return Some(SDHCTask::SendBufReadReady);
+                        }
+                    },
+                    CardTXStatus::MultiWritePending => {
+                        if new & 1 == 1 {
+                            iface.card.tx_status = CardTXStatus::MultiWriteInProgress;
+                            return Some(SDHCTask::SendBufWriteReady);
+                        }
+                    },
+                    CardTXStatus::None | CardTXStatus::MultiReadInProgress | CardTXStatus::MultiWriteInProgress => { // No action taken here
+                        return None;
+                    },
                 }
             },
             SDRegisters::ErrorIntStatus => {
@@ -268,6 +283,30 @@ impl SDRegisters {
                 }
                 else { unimplemented!("DAT and CMD line resets"); }
             },
+            SDRegisters::BufferDataPort => {
+                match iface.card.tx_status {
+                    CardTXStatus::None |
+                    CardTXStatus::MultiReadPending |
+                    CardTXStatus::MultiReadInProgress |
+                    CardTXStatus::MultiWritePending => {
+                        panic!()
+                    }
+                    CardTXStatus::MultiWriteInProgress => {
+                        let index = iface.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
+                        {
+                            let mut v = iface.card.backing_mem.lock();
+                            if v.data.len() < index+4 || index+4 > iface.card.rw_stop {
+                                // return Err(anyhow!("out of range! {index:?} {:?} {} ", v.data.len(), iface.card.rw_stop));
+                                return None;
+                            }
+                            iface.card.rw_index.store(index+4, std::sync::atomic::Ordering::Relaxed);
+                            v.write(index, new).unwrap();
+                            //println!("{index:08x} {ret:08x}");
+                            //return Ok(BusPacket::Word(ret));
+                        }
+                    },
+                }
+            }
             SDRegisters::TxMode |
             SDRegisters::BlockCount |
             SDRegisters::BlockSize |
@@ -306,6 +345,8 @@ enum CardTXStatus {
     None,
     MultiReadPending,
     MultiReadInProgress,
+    MultiWritePending,
+    MultiWriteInProgress,
 }
 
 impl Default for CardTXStatus {
@@ -427,9 +468,9 @@ impl NewSDInterface {
             return false;
         }
         error!(target: "SDHC", "buffer read ready");
-        // Present State Buffer Read Enable (11) & Read Tx Active (9)
+        // Present State Buffer Read Enable (11) & Read Tx Active (9) & Command Inhibit (DAT) (1)
         let ps = self.raw_read(SDRegisters::PresentState.base_offset());
-        self.setreg(SDRegisters::PresentState, ps | 1<<11 | 1<<9);
+        self.setreg(SDRegisters::PresentState, ps | 1<<11 | 1<<9| 1 << 1);
         // Set Buffer Read Ready Int
         let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
         let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
@@ -446,17 +487,48 @@ impl NewSDInterface {
         }
         true
     }
+    fn buffer_ready_write(&mut self) -> bool {
+        let blocks_remaining = self.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16; // p83
+        if blocks_remaining > 0 {
+            // tell card it's rw_stop
+            self.card.rw_stop = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) + (blocks_remaining as usize *512);
+        }
+        else {
+            error!("asdf");
+            return false;
+        }
+        error!(target: "SDHC", "buffer write ready");
+        // Present State Buffer Write Enable (11) & Write Tx Active (9) & Command Inhibit (DAT) (1)
+        let ps = self.raw_read(SDRegisters::PresentState.base_offset());
+        self.setreg(SDRegisters::PresentState, ps | 1<<10 | 1<<8 | 1 << 1);
+        // Set Buffer Write Ready Int
+        let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
+        let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
+        const BUFFER_WRITE_READY_MASK: u32 = 1 << 4;
+        if signal & BUFFER_WRITE_READY_MASK != 0 && status & BUFFER_WRITE_READY_MASK != 0 {
+            let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
+            let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
+            self.setreg(SDRegisters::NormalIntStatus, nisr | BUFFER_WRITE_READY_MASK);
+            self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
+        }
+        else {
+            error!("fdsfasd");
+            return false;
+        }
+        true
+    }
     fn tx_complete(&mut self) {
         debug!(target: "SDHC", "Tx Complete");
         match self.card.tx_status {
             CardTXStatus::None |
-            CardTXStatus::MultiReadPending => {unimplemented!()},
-            CardTXStatus::MultiReadInProgress => {
+            CardTXStatus::MultiReadPending |
+            CardTXStatus::MultiWritePending |
+            CardTXStatus::MultiWriteInProgress => {
                 // Clear Block Count Register
                 self.setreg(SDRegisters::BlockCount, 0);
-                // clear PS Buffer read enable & Read Tx Active
+                // clear PS Buffer write enable & Write Tx Active & CMD Inhibit (DAT)
                 let ps = self.raw_read(SDRegisters::PresentState.base_offset());
-                const KILL_MASK: u32 = !(1<<11 | 1<<9);
+                const KILL_MASK: u32 = !(1<<10 | 1<<8 | 1 << 1);
                 self.setreg(SDRegisters::PresentState, ps & KILL_MASK);
                 let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
                 let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
@@ -468,6 +540,26 @@ impl NewSDInterface {
                     self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
                 }
                 self.card.tx_status = CardTXStatus::None;
+                self.card.state = CardState::Trans;
+            },
+            CardTXStatus::MultiReadInProgress => {
+                // Clear Block Count Register
+                self.setreg(SDRegisters::BlockCount, 0);
+                // clear PS Buffer read enable & Read Tx Active & CMD Inhibit (DAT)
+                let ps = self.raw_read(SDRegisters::PresentState.base_offset());
+                const KILL_MASK: u32 = !(1<<11 | 1<<9 | 1 << 1);
+                self.setreg(SDRegisters::PresentState, ps & KILL_MASK);
+                let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
+                let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
+                const TRANSFER_COMPLETE_MASK: u32 = 1 << 1;
+                if signal & TRANSFER_COMPLETE_MASK != 0 && status & TRANSFER_COMPLETE_MASK != 0 {
+                    let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
+                    let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
+                    self.setreg(SDRegisters::NormalIntStatus, nisr | TRANSFER_COMPLETE_MASK);
+                    self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
+                }
+                self.card.tx_status = CardTXStatus::None;
+                self.card.state = CardState::Trans;
             },
         }
     }
@@ -496,7 +588,9 @@ impl MmioDevice for NewSDInterface {
         if off == SDRegisters::BufferDataPort.base_offset() {
             match self.card.tx_status {
                 CardTXStatus::None |
-                CardTXStatus::MultiReadPending => {}
+                CardTXStatus::MultiReadPending |
+                CardTXStatus::MultiWritePending  => {},
+                CardTXStatus::MultiWriteInProgress => { panic!(); }
                 CardTXStatus::MultiReadInProgress => {
                     let index = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
                     {
@@ -583,11 +677,26 @@ impl Bus {
                     },
                 }
             },
+            SDHCTask::SendBufWriteReady => {
+                match self.sd0.buffer_ready_write() {
+                    true => {
+                        self.tasks.push(
+                            Task { kind: BusTask::SDHC(SDHCTask::IOPoll), target_cycle: self.cycle+10000 }
+                        );
+                        self.hlwd.irq.assert(HollywoodIrq::Sdhc);
+                    },
+                    false => {
+                        unimplemented!();
+                    },
+                }
+            }
             SDHCTask::IOPoll => {
-                trace!(target: "SDHC", "SDHC IOPOLL");
+                let rw_index = self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
+                trace!(target: "SDHC", "SDHC IOPOLL {} {}", rw_index, self.sd0.card.rw_stop);
                 match self.sd0.card.tx_status {
                     CardTXStatus::None |
-                    CardTXStatus::MultiReadPending => {},
+                    CardTXStatus::MultiReadPending |
+                    CardTXStatus::MultiWritePending => {},
                     CardTXStatus::MultiReadInProgress => {
                         if self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) >= self.sd0.card.rw_stop {
                             self.sd0.tx_complete();
@@ -599,8 +708,19 @@ impl Bus {
                             );
                         }
                     },
+                    CardTXStatus::MultiWriteInProgress => {
+                        if self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) >= self.sd0.card.rw_stop {
+                            self.sd0.tx_complete();
+                            self.hlwd.irq.assert(HollywoodIrq::Sdhc);
+                        }
+                        else {
+                            self.tasks.push(
+                                Task { kind: BusTask::SDHC(SDHCTask::IOPoll), target_cycle: self.cycle+10000 }
+                            );
+                        }
+                    }
                 }
-            }
+            },
         }
     }
 }

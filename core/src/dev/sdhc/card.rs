@@ -49,7 +49,7 @@ impl CommandType {
 use parking_lot::Mutex;
 #[derive(Debug)]
 pub(super) struct Card {
-    state: CardState,
+    pub state: CardState,
     pub backing_mem: Mutex<BigEndianMemory>,
     acmd: bool,
     ocr: OcrReg,
@@ -66,7 +66,7 @@ impl Default for Card {
     fn default() -> Self {
         Self {
             state: Default::default(),
-            backing_mem: Mutex::new(BigEndianMemory::new(4194304000, Some("test.fat"), false).unwrap()),
+            backing_mem: Mutex::new(BigEndianMemory::new(4194304000, Some("test.fat"), true).unwrap()),
             acmd: Default::default(),
             ocr: Default::default(),
             cid: Default::default(),
@@ -95,6 +95,7 @@ impl Card {
             (false, 7) => { return self.cmd7(argument); },
             (false, 16) => { return Some(self.cmd16(argument)); },
             (false, 18) => { return Some(self.cmd18(argument)); }
+            (false, 25) => { return Some(self.cmd25(argument)); }
             (_, 55) => {
                 self.acmd = true;
                 return Some(Response::Regular(0));
@@ -165,9 +166,19 @@ impl Card {
         Response::Regular(response)
     }
     fn cmd18(&mut self, argument: u32) -> Response {
+        log::error!(target: "SDHC", "{}", argument * 512);
+        self.state = CardState::Data;
         self.rw_index.store(argument as usize * 512 , std::sync::atomic::Ordering::Relaxed);
         let response = (self.state.bits_for_card_status() as u32) << 9;
         self.tx_status = CardTXStatus::MultiReadPending;
+        Response::Regular(response)
+    }
+    fn cmd25(&mut self, argument: u32) -> Response {
+        log::error!(target: "SDHC", "{}", argument * 512);
+        self.state = CardState::Rcv;
+        self.rw_index.store(argument as usize * 512 , std::sync::atomic::Ordering::Relaxed);
+        let response = (self.state.bits_for_card_status() as u32) << 9;
+        self.tx_status = CardTXStatus::MultiWritePending;
         Response::Regular(response)
     }
 }
@@ -183,7 +194,7 @@ pub(super) enum Response {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-enum CardState {
+pub(super) enum CardState {
     Idle,
     Ready,
     Ident,
