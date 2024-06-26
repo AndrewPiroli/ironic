@@ -461,7 +461,8 @@ impl NewSDInterface {
         let blocks_remaining = self.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16; // p83
         if blocks_remaining > 0 {
             // tell card it's rw_stop
-            self.card.rw_stop = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) + (blocks_remaining as usize *512);
+            self.card.rw_stop = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) + 512;
+            self.setreg(SDRegisters::BlockCount, blocks_remaining.saturating_sub(1));
         }
         else {
             error!("asdf");
@@ -491,7 +492,8 @@ impl NewSDInterface {
         let blocks_remaining = self.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16; // p83
         if blocks_remaining > 0 {
             // tell card it's rw_stop
-            self.card.rw_stop = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) + (blocks_remaining as usize *512);
+            self.card.rw_stop = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) + 512;
+            self.setreg(SDRegisters::BlockCount, blocks_remaining.saturating_sub(1));
         }
         else {
             error!("asdf");
@@ -699,8 +701,16 @@ impl Bus {
                     CardTXStatus::MultiWritePending => {},
                     CardTXStatus::MultiReadInProgress => {
                         if self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) >= self.sd0.card.rw_stop {
-                            self.sd0.tx_complete();
-                            self.hlwd.irq.assert(HollywoodIrq::Sdhc);
+                            let blocks_remain = self.sd0.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
+                            if blocks_remain > 0 {
+                                self.tasks.push(
+                                    Task { kind: BusTask::SDHC(SDHCTask::SendBufReadReady), target_cycle: self.cycle + 10000 }
+                                );
+                            }
+                            else {
+                                self.sd0.tx_complete();
+                                self.hlwd.irq.assert(HollywoodIrq::Sdhc);
+                            }
                         }
                         else {
                             self.tasks.push(
@@ -710,8 +720,16 @@ impl Bus {
                     },
                     CardTXStatus::MultiWriteInProgress => {
                         if self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) >= self.sd0.card.rw_stop {
-                            self.sd0.tx_complete();
-                            self.hlwd.irq.assert(HollywoodIrq::Sdhc);
+                            let blocks_remain = self.sd0.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
+                            if blocks_remain > 0 {
+                                self.tasks.push(
+                                    Task { kind: BusTask::SDHC(SDHCTask::SendBufReadReady), target_cycle: self.cycle + 10000 }
+                                );
+                            }
+                            else {
+                                self.sd0.tx_complete();
+                                self.hlwd.irq.assert(HollywoodIrq::Sdhc);
+                            }
                         }
                         else {
                             self.tasks.push(
