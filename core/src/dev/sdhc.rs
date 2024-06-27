@@ -180,7 +180,7 @@ impl SDRegisters {
             SDRegisters::ErrorIntStatus
         )
     }
-    fn run_write_handler(&self, iface: &mut NewSDInterface, old: u32, new: u32) -> Option<SDHCTask> {
+    fn run_write_handler(&self, iface: &mut SDInterface, old: u32, new: u32) -> Option<SDHCTask> {
         let shift: usize;
         let mask: u32;
         if self.bytecount_of_reg() >= 4 {
@@ -317,7 +317,7 @@ impl SDRegisters {
         }
         None
     }
-    fn apply_response(&self, iface: &mut NewSDInterface, response: Response) {
+    fn apply_response(&self, iface: &mut SDInterface, response: Response) {
         match response {
             Response::Regular(r) => {
                 iface.raw_write(SDRegisters::Response.base_offset(), r);
@@ -333,7 +333,7 @@ impl SDRegisters {
 }
 
 #[repr(C, align(64))]
-pub struct NewSDInterface {
+pub struct SDInterface {
     register_file: [u8; 256],
     pending_intterrupt_flags: u32,
     insert_raised: bool,
@@ -343,7 +343,7 @@ pub struct NewSDInterface {
     tx_status: CardTXStatus,
 }
 
-impl NewSDInterface {
+impl SDInterface {
     fn raw_read(&self, off: usize) -> u32 {
         let p = (&self.register_file) as *const [u8;256] as *const u32;
         assert!(off & 0xffff_fffc == off); // alignment
@@ -517,7 +517,7 @@ impl NewSDInterface {
     }
 }
 
-impl Default for NewSDInterface {
+impl Default for SDInterface {
     fn default() -> Self {
         let (card, card_available) = Card::try_new();
         let mut new = Self { register_file: [0;256], pending_intterrupt_flags: 0, insert_raised: false, first_ack: false, card, card_available, tx_status: CardTXStatus::None };
@@ -533,7 +533,7 @@ impl Default for NewSDInterface {
     }
 }
 
-impl MmioDevice for NewSDInterface {
+impl MmioDevice for SDInterface {
     type Width = u32;
 
     fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
