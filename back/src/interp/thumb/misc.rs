@@ -1,6 +1,6 @@
 use crate::bits::thumb::*;
 use crate::interp::DispatchRes;
-use ironic_core::cpu::{reg::Reg, Cpu};
+use ironic_core::cpu::Cpu;
 use ironic_core::cpu::excep::ExceptionType;
 use anyhow::anyhow;
 use log::{debug, info};
@@ -42,9 +42,6 @@ pub fn bkpt(cpu: &mut Cpu, op: MiscBits) -> DispatchRes {
                 Err(e) => { return DispatchRes::FatalErr(e); }
             }
         },
-        0xfa => {
-            println!("AP DBG internal {:?}", cpu.reg);
-        }
         _      => {},
     }
     cpu.scratch = cmd as u32;
