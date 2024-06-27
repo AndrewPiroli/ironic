@@ -3,28 +3,41 @@ use log::debug;
 
 use crate::mem::BigEndianMemory;
 
-use super::CardTXStatus;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CardTXStatus {
+    None,
+    MultiReadPending,
+    MultiReadInProgress,
+    MultiWritePending,
+    MultiWriteInProgress,
+}
+
+impl Default for CardTXStatus {
+    fn default() -> Self {
+        Self::None
+    }
+}
 
 // type ResponseLength = u8;
 #[derive(Debug, Clone)]
 pub struct Command {
     pub index: u8,
-    ty: CommandType,
-    data_present: bool,
+    _ty: CommandType,
+    _data_present: bool,
     // command_idx_ck: bool,
     // crc_ck: bool,
-    response: bool,
+    _response: bool,
 }
 
 impl From<u32> for Command {
     fn from(value: u32) -> Self {
             Self {
                 index: ((value & 0x3f00) >> 8) as u8,
-                ty: CommandType::new(((value & (1<<6)) >> 6) == 1, ((value & (1<<7)) >> 7) == 1),
-                data_present: ((value & (1<<5)) >> 5 == 1),
+                _ty: CommandType::new(((value & (1<<6)) >> 6) == 1, ((value & (1<<7)) >> 7) == 1),
+                _data_present: ((value & (1<<5)) >> 5 == 1),
                 // command_idx_ck: ((value & (1<<4)) >> 5 == 1),
                 // crc_ck: ((value & (1<<3)) >> 5 == 1),
-                response: value & 0b11 != 0,
+                _response: value & 0b11 != 0,
             }
     }
 }
@@ -64,13 +77,14 @@ pub(super) struct Card {
 
 impl Card {
     pub(super) fn try_new() -> (Self, bool) {
+        const FILENAME: &str = "sd.img";
         let mut len = 0usize;
         let backing_mem: BigEndianMemory;
         let mut card_inserted = true;
-        if let Ok(f) = std::fs::File::open("test.fat")
+        if let Ok(f) = std::fs::File::open(FILENAME)
         && let Ok(metadata) = f.metadata() {
             len = metadata.len() as usize;
-            backing_mem = BigEndianMemory::new(len, Some("test.fat"), false).unwrap_or_else(|_|{
+            backing_mem = BigEndianMemory::new(len, Some(FILENAME), false).unwrap_or_else(|_|{
                 card_inserted = false;
                 BigEndianMemory::new(len, None, false).unwrap()
             });
@@ -181,7 +195,7 @@ impl Card {
         Response::Regular(response)
     }
     fn cmd18(&mut self, argument: u32) -> Response {
-        log::error!(target: "SDHC", "{}", argument * 512);
+        log::debug!(target: "SDHC", "Issued multi block transfer(R): {} bytes", argument * 512);
         self.state = CardState::Data;
         self.rw_index.store(argument as usize * 512 , std::sync::atomic::Ordering::Relaxed);
         let response = (self.state.bits_for_card_status() as u32) << 9;
@@ -189,7 +203,7 @@ impl Card {
         Response::Regular(response)
     }
     fn cmd25(&mut self, argument: u32) -> Response {
-        log::error!(target: "SDHC", "{}", argument * 512);
+        log::debug!(target: "SDHC", "Issued multi block transfer(W): {} bytes", argument * 512);
         self.state = CardState::Rcv;
         self.rw_index.store(argument as usize * 512 , std::sync::atomic::Ordering::Relaxed);
         let response = (self.state.bits_for_card_status() as u32) << 9;
@@ -203,10 +217,11 @@ impl Card {
 // Different types are for mapping the Part 1 response field bits to Part 2 Response Register bits
 pub(super) enum Response {
     Regular(u32), // R1, R3, R4, R5, R6, R7. Part 1 [39:8] to Part 2 [31:0]
-    AutoCMD12(u32), // Part 1 [39:8] to Part 2 [127:96]
+    // AutoCMD12(u32), // Part 1 [39:8] to Part 2 [127:96]
     R2(u128), // Part 1 [127:8] to Part 2 [119:0]
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub(super) enum CardState {

@@ -19,7 +19,7 @@ implementation since the beginning:
 - [x] Execution through IOS second-stage bootloader
 - [x] Execution in the IOS kernel
 - [x] Broadway/PowerPC-world HLE 
-- [ ] Emulated SDHC (SD card) support?
+- [x] Emulated SDHC (SD card) support. (Alpha quality ATM! Place sd image as "sd.img" to connect card)
 - [ ] Emulated USB support?
 - [ ] Emulated WLAN functionality?
 - [ ] Write a bunch of tests

@@ -1,3 +1,4 @@
+#![allow(clippy::needless_return, clippy::zero_prefixed_literal)]
 pub(crate) mod card;
 
 use anyhow::anyhow;
@@ -172,15 +173,14 @@ impl SDRegisters {
     }
     // These registers have RW1C bits or additional logic that must run on any write, even if the register is ultimiately unchanged
     fn must_always_handle_writes(&self) -> bool {
-        match self {
+        matches!(self,
             SDRegisters::BufferDataPort |
             SDRegisters::Command |
             SDRegisters::NormalIntStatus |
-            SDRegisters::ErrorIntStatus => true,
-            _ => false,
-        }
+            SDRegisters::ErrorIntStatus
+        )
     }
-    fn run_write_handler(&self, iface: &mut NewSDInterface, old: u32, new: u32) -> Option<SDHCTask> {
+    fn run_write_handler(&self, iface: &mut SDInterface, old: u32, new: u32) -> Option<SDHCTask> {
         let shift: usize;
         let mask: u32;
         if self.bytecount_of_reg() >= 4 {
@@ -205,8 +205,8 @@ impl SDRegisters {
                 if let Some(response) = iface.card.issue(x, iface.raw_read(SDRegisters::Argument.base_offset())){
                     self.apply_response(iface, response);
                 }
-                if let Some(task) = iface.cmd_complete() {
-                    return Some(task);
+                if iface.cmd_complete() {
+                    return Some(SDHCTask::RaiseInt);
                 }
             }
             SDRegisters::NormalIntStatus => {
@@ -245,31 +245,25 @@ impl SDRegisters {
             SDRegisters::NormalIntSignalEnable => {
                 debug!(target:"SDHC", "Normal Int Signal Enable {new:b}");
                 iface.setreg(*self, new);
-                if let Some(do_insert_int) = iface.insert_card() {
-                    return Some(do_insert_int);
-                }
-                if let Some(first_ack) = iface.first_ack() {
-                    return Some(first_ack);
+                if iface.do_pending_ints() || iface.insert_card() || iface.first_ack() {
+                    return Some(SDHCTask::RaiseInt);
                 }
             },
             SDRegisters::NormalIntStatusEnable => {
                 debug!(target: "SDHC", "Normal Int Status Enable {new:b}");
                 iface.setreg(*self, new);
-                if let Some(do_insert_int) = iface.insert_card() {
-                    return Some(do_insert_int);
-                }
-                if let Some(first_ack) = iface.first_ack() {
-                    return Some(first_ack);
+                if iface.do_pending_ints() || iface.insert_card() || iface.first_ack() {
+                    return Some(SDHCTask::RaiseInt);
                 }
             },
             SDRegisters::ClockControl => {
                 // set internal clock stable (bit 1) based on internal clock enable (bit 0)
                 match new & 0b1 {
                     0b0 => {
-                        new = new & 0xffff_fffc;
+                        new &= 0xffff_fffc;
                     }
                     0b1 => {
-                        new = new | 0b10;
+                        new |= 0b10;
                     }
                     _=> {}
                 }
@@ -323,7 +317,7 @@ impl SDRegisters {
         }
         None
     }
-    fn apply_response(&self, iface: &mut NewSDInterface, response: Response) {
+    fn apply_response(&self, iface: &mut SDInterface, response: Response) {
         match response {
             Response::Regular(r) => {
                 iface.raw_write(SDRegisters::Response.base_offset(), r);
@@ -334,29 +328,14 @@ impl SDRegisters {
                 iface.raw_write(SDRegisters::Response.base_offset() + 08, ((r >> 64) & 0xffff_ffff) as u32);
                 iface.raw_write(SDRegisters::Response.base_offset() + 12, ((r >> 96) & 0xffff_ffff) as u32);
             }
-            _ => unimplemented!(),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CardTXStatus {
-    None,
-    MultiReadPending,
-    MultiReadInProgress,
-    MultiWritePending,
-    MultiWriteInProgress,
-}
-
-impl Default for CardTXStatus {
-    fn default() -> Self {
-        Self::None
-    }
-}
-
 #[repr(C, align(64))]
-pub struct NewSDInterface {
+pub struct SDInterface {
     register_file: [u8; 256],
+    pending_intterrupt_flags: u32,
     insert_raised: bool,
     first_ack: bool,
     card: Card,
@@ -364,7 +343,7 @@ pub struct NewSDInterface {
     tx_status: CardTXStatus,
 }
 
-impl NewSDInterface {
+impl SDInterface {
     fn raw_read(&self, off: usize) -> u32 {
         let p = (&self.register_file) as *const [u8;256] as *const u32;
         assert!(off & 0xffff_fffc == off); // alignment
@@ -397,6 +376,46 @@ impl NewSDInterface {
         let new = old | ((val << val_shift) & mask);
         self.raw_write(reg.base_offset() & 0xffff_fffc, new);
     }
+    fn ck_int_enabled(&self, int: u32) -> bool {
+        let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
+        let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
+        signal & int != 0 && status & int != 0
+    }
+    fn do_pending_ints(&mut self) -> bool {
+        if self.pending_intterrupt_flags == 0 {
+            return false;
+        }
+        let mut nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
+        let mut found = false;
+        for i in 0..32 {
+            let int = self.pending_intterrupt_flags & (1 << i);
+            if self.ck_int_enabled(int) {
+                found = true;
+                self.pending_intterrupt_flags &= !int;
+                nisr |= int;
+            }
+        }
+        if found {
+            let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
+            self.setreg(SDRegisters::NormalIntStatus, nisr);
+            self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
+        }
+        return found;
+    }
+    // returns true if the interrupt should be raised now, false if it's masked and will be raised later
+    fn raise_int(&mut self, int: u32) -> bool {
+        if self.ck_int_enabled(int) {
+            let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
+            let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
+            self.setreg(SDRegisters::NormalIntStatus, nisr | int);
+            self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
+            true
+        }
+        else {
+            self.pending_intterrupt_flags |= int;
+            false
+        }
+    }
     fn reset(&mut self) {
         debug!(target: "SDHC", "SD interface software reset");
         let mut new = Self::default();
@@ -405,88 +424,46 @@ impl NewSDInterface {
         new.insert_raised = self.insert_raised;
         *self = new;
     }
-    fn insert_card(&mut self) -> Option<SDHCTask> {
+    fn insert_card(&mut self) -> bool {
         if self.insert_raised || !self.card_available {
-            return None;
+            return false;
         }
-        let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
-        let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
+        let current_state = self.raw_read(SDRegisters::PresentState.base_offset());
+        self.setreg(SDRegisters::PresentState, current_state | (1<<16) | (1<<17) | (1 << 18)); // card inserted
+        self.insert_raised = true;
         const INSERT_INT_MASK: u32 = 1 << 6;
-        if signal & INSERT_INT_MASK != 0 && status & INSERT_INT_MASK != 0 {
-            let current_state = self.raw_read(SDRegisters::PresentState.base_offset());
-            self.setreg(SDRegisters::PresentState, current_state | (1<<16) | (1<<17) | (1 << 18)); // card inserted
-            let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
-            let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
-            self.setreg(SDRegisters::NormalIntStatus, nisr | 0x1); // command complete
-            self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
-            self.insert_raised = true;
-            return Some(SDHCTask::RaiseInt);
-        }
-        None
+        return self.raise_int(INSERT_INT_MASK);
     }
-    fn first_ack(&mut self) -> Option<SDHCTask> {
+    fn first_ack(&mut self) -> bool {
         if self.first_ack {
-            return None;
+            return false;
         }
-        let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
-        let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
+        self.first_ack = true;
+        debug!(target: "SDHC", "Sending inital ack for card setup");
         const CMD_COMPLETE_MASK: u32 = 1;
-        if signal & CMD_COMPLETE_MASK != 0 && status & CMD_COMPLETE_MASK != 0 {
-            let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
-            let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
-            self.setreg(SDRegisters::NormalIntStatus, nisr | 0x1); // command complete
-            self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
-            self.first_ack = true;
-            debug!(target: "SDHC", "Sending inital ack for card setup");
-            return Some(SDHCTask::RaiseInt);
-        }
-        None
+        return self.raise_int(CMD_COMPLETE_MASK);
     }
-    fn cmd_complete(&mut self) -> Option<SDHCTask> {
-        let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
-        let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
+    fn cmd_complete(&mut self) -> bool {
+        debug!(target: "SDHC", "CMD complete int");
         const CMD_COMPLETE_MASK: u32 = 1;
-        if signal & CMD_COMPLETE_MASK != 0 && status & CMD_COMPLETE_MASK != 0 {
-            let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
-            let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
-            self.setreg(SDRegisters::NormalIntStatus, nisr | 0x1); // command complete
-            self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
-            debug!(target: "SDHC", "CMD complete int");
-            return Some(SDHCTask::RaiseInt);
-        }
-        None
+        return self.raise_int(CMD_COMPLETE_MASK);
     }
     fn buffer_ready_read(&mut self) -> bool {
-        // 25
-        let blocks_remaining = self.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16; // p83
+        let blocks_remaining = self.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
         if blocks_remaining > 0 {
-            // tell card it's rw_stop
             self.card.rw_stop = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) + 512;
             self.setreg(SDRegisters::BlockCount, blocks_remaining.saturating_sub(1));
         }
         else {
-            error!("asdf");
             return false;
         }
-        error!(target: "SDHC", "buffer read ready");
+        trace!(target: "SDHC", "Buffer Ready Read");
         // Present State Buffer Read Enable (11) & Read Tx Active (9) & Command Inhibit (DAT) (1)
         let ps = self.raw_read(SDRegisters::PresentState.base_offset());
         self.setreg(SDRegisters::PresentState, ps | 1<<11 | 1<<9| 1 << 1);
         // Set Buffer Read Ready Int
-        let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
-        let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
         const BUFFER_READ_READY_MASK: u32 = 1 << 5;
-        if signal & BUFFER_READ_READY_MASK != 0 && status & BUFFER_READ_READY_MASK != 0 {
-            let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
-            let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
-            self.setreg(SDRegisters::NormalIntStatus, nisr | BUFFER_READ_READY_MASK);
-            self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
-        }
-        else {
-            error!("fdsfasd");
-            return false;
-        }
-        true
+        return self.raise_int(BUFFER_READ_READY_MASK);
     }
     fn buffer_ready_write(&mut self) -> bool {
         let blocks_remaining = self.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16; // p83
@@ -496,30 +473,17 @@ impl NewSDInterface {
             self.setreg(SDRegisters::BlockCount, blocks_remaining.saturating_sub(1));
         }
         else {
-            error!("asdf");
             return false;
         }
-        error!(target: "SDHC", "buffer write ready");
+        trace!(target: "SDHC", "Buffer Ready Write");
         // Present State Buffer Write Enable (11) & Write Tx Active (9) & Command Inhibit (DAT) (1)
         let ps = self.raw_read(SDRegisters::PresentState.base_offset());
         self.setreg(SDRegisters::PresentState, ps | 1<<10 | 1<<8 | 1 << 1);
         // Set Buffer Write Ready Int
-        let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
-        let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
         const BUFFER_WRITE_READY_MASK: u32 = 1 << 4;
-        if signal & BUFFER_WRITE_READY_MASK != 0 && status & BUFFER_WRITE_READY_MASK != 0 {
-            let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
-            let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
-            self.setreg(SDRegisters::NormalIntStatus, nisr | BUFFER_WRITE_READY_MASK);
-            self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
-        }
-        else {
-            error!("fdsfasd");
-            return false;
-        }
-        true
+        return self.raise_int(BUFFER_WRITE_READY_MASK);
     }
-    fn tx_complete(&mut self) {
+    fn tx_complete(&mut self) -> bool {
         debug!(target: "SDHC", "Tx Complete");
         match self.card.tx_status {
             CardTXStatus::None |
@@ -532,17 +496,10 @@ impl NewSDInterface {
                 let ps = self.raw_read(SDRegisters::PresentState.base_offset());
                 const KILL_MASK: u32 = !(1<<10 | 1<<8 | 1 << 1);
                 self.setreg(SDRegisters::PresentState, ps & KILL_MASK);
-                let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
-                let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
-                const TRANSFER_COMPLETE_MASK: u32 = 1 << 1;
-                if signal & TRANSFER_COMPLETE_MASK != 0 && status & TRANSFER_COMPLETE_MASK != 0 {
-                    let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
-                    let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
-                    self.setreg(SDRegisters::NormalIntStatus, nisr | TRANSFER_COMPLETE_MASK);
-                    self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
-                }
                 self.card.tx_status = CardTXStatus::None;
                 self.card.state = CardState::Trans;
+                const TRANSFER_COMPLETE_MASK: u32 = 1 << 1;
+                return self.raise_int(TRANSFER_COMPLETE_MASK);
             },
             CardTXStatus::MultiReadInProgress => {
                 // Clear Block Count Register
@@ -551,26 +508,19 @@ impl NewSDInterface {
                 let ps = self.raw_read(SDRegisters::PresentState.base_offset());
                 const KILL_MASK: u32 = !(1<<11 | 1<<9 | 1 << 1);
                 self.setreg(SDRegisters::PresentState, ps & KILL_MASK);
-                let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
-                let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
                 const TRANSFER_COMPLETE_MASK: u32 = 1 << 1;
-                if signal & TRANSFER_COMPLETE_MASK != 0 && status & TRANSFER_COMPLETE_MASK != 0 {
-                    let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
-                    let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
-                    self.setreg(SDRegisters::NormalIntStatus, nisr | TRANSFER_COMPLETE_MASK);
-                    self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
-                }
                 self.card.tx_status = CardTXStatus::None;
                 self.card.state = CardState::Trans;
+                return self.raise_int(TRANSFER_COMPLETE_MASK);
             },
         }
     }
 }
 
-impl Default for NewSDInterface {
+impl Default for SDInterface {
     fn default() -> Self {
         let (card, card_available) = Card::try_new();
-        let mut new = Self { register_file: [0;256], insert_raised: false, first_ack: false, card, card_available, tx_status: CardTXStatus::None };
+        let mut new = Self { register_file: [0;256], pending_intterrupt_flags: 0, insert_raised: false, first_ack: false, card, card_available, tx_status: CardTXStatus::None };
         // Fill HWInit registers
         // Advertise 3.3v support in Capabilities Register
         // Advertise 10Mhz base clock
@@ -583,7 +533,7 @@ impl Default for NewSDInterface {
     }
 }
 
-impl MmioDevice for NewSDInterface {
+impl MmioDevice for SDInterface {
     type Width = u32;
 
     fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
@@ -708,9 +658,8 @@ impl Bus {
                                     Task { kind: BusTask::SDHC(SDHCTask::SendBufReadReady), target_cycle: self.cycle + 10000 }
                                 );
                             }
-                            else {
-                                self.sd0.tx_complete();
-                                self.hlwd.irq.assert(HollywoodIrq::Sdhc);
+                            else if self.sd0.tx_complete() {
+                               self.hlwd.irq.assert(HollywoodIrq::Sdhc);
                             }
                         }
                         else {
@@ -724,11 +673,10 @@ impl Bus {
                             let blocks_remain = self.sd0.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
                             if blocks_remain > 0 {
                                 self.tasks.push(
-                                    Task { kind: BusTask::SDHC(SDHCTask::SendBufReadReady), target_cycle: self.cycle + 10000 }
+                                    Task { kind: BusTask::SDHC(SDHCTask::SendBufWriteReady), target_cycle: self.cycle + 10000 }
                                 );
                             }
-                            else {
-                                self.sd0.tx_complete();
+                            else if self.sd0.tx_complete() {
                                 self.hlwd.irq.assert(HollywoodIrq::Sdhc);
                             }
                         }
