@@ -6,7 +6,6 @@ use log::debug;
 use log::error;
 use log::log_enabled;
 use log::trace;
-use log::warn;
 
 use crate::bus::prim::*;
 use crate::bus::mmio::*;
@@ -171,8 +170,7 @@ impl SDRegisters {
             SDRegisters::HostControllerVersion => 2,
         }
     }
-    // These registers have RW1C bits, so writing a 1 to them clears the bit
-    // The normal old != new check is not enough
+    // These registers have RW1C bits or additional logic that must run on any write, even if the register is ultimiately unchanged
     fn must_always_handle_writes(&self) -> bool {
         match self {
             SDRegisters::BufferDataPort |
@@ -315,6 +313,7 @@ impl SDRegisters {
             SDRegisters::ErrorIntSignalEnable |
             SDRegisters::TimeoutControl |
             SDRegisters::PowerControl => {
+                // No special handling needed for these registers
                 iface.setreg(*self, new);
             },
             other => {
@@ -361,6 +360,7 @@ pub struct NewSDInterface {
     insert_raised: bool,
     first_ack: bool,
     card: Card,
+    card_available: bool,
     tx_status: CardTXStatus,
 }
 
@@ -406,7 +406,7 @@ impl NewSDInterface {
         *self = new;
     }
     fn insert_card(&mut self) -> Option<SDHCTask> {
-        if self.insert_raised {
+        if self.insert_raised || !self.card_available {
             return None;
         }
         let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
@@ -437,7 +437,7 @@ impl NewSDInterface {
             self.setreg(SDRegisters::NormalIntStatus, nisr | 0x1); // command complete
             self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
             self.first_ack = true;
-            warn!(target: "SDHC", "Sending inital ack for card setup");
+            debug!(target: "SDHC", "Sending inital ack for card setup");
             return Some(SDHCTask::RaiseInt);
         }
         None
@@ -569,7 +569,8 @@ impl NewSDInterface {
 
 impl Default for NewSDInterface {
     fn default() -> Self {
-        let mut new = Self { register_file: [0;256], insert_raised: false, first_ack: false, card: Card::default(), tx_status: CardTXStatus::None };
+        let (card, card_available) = Card::try_new();
+        let mut new = Self { register_file: [0;256], insert_raised: false, first_ack: false, card, card_available, tx_status: CardTXStatus::None };
         // Fill HWInit registers
         // Advertise 3.3v support in Capabilities Register
         // Advertise 10Mhz base clock
@@ -700,7 +701,7 @@ impl Bus {
                     CardTXStatus::MultiReadPending |
                     CardTXStatus::MultiWritePending => {},
                     CardTXStatus::MultiReadInProgress => {
-                        if self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) >= self.sd0.card.rw_stop {
+                        if rw_index >= self.sd0.card.rw_stop {
                             let blocks_remain = self.sd0.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
                             if blocks_remain > 0 {
                                 self.tasks.push(
@@ -719,7 +720,7 @@ impl Bus {
                         }
                     },
                     CardTXStatus::MultiWriteInProgress => {
-                        if self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) >= self.sd0.card.rw_stop {
+                        if rw_index >= self.sd0.card.rw_stop {
                             let blocks_remain = self.sd0.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
                             if blocks_remain > 0 {
                                 self.tasks.push(

@@ -62,21 +62,36 @@ pub(super) struct Card {
     pub tx_status: CardTXStatus,
 }
 
-impl Default for Card {
-    fn default() -> Self {
-        Self {
+impl Card {
+    pub(super) fn try_new() -> (Self, bool) {
+        let mut len = 0usize;
+        let backing_mem: BigEndianMemory;
+        let mut card_inserted = true;
+        if let Ok(f) = std::fs::File::open("test.fat")
+        && let Ok(metadata) = f.metadata() {
+            len = metadata.len() as usize;
+            backing_mem = BigEndianMemory::new(len, Some("test.fat"), false).unwrap_or_else(|_|{
+                card_inserted = false;
+                BigEndianMemory::new(len, None, false).unwrap()
+            });
+        }
+        else {
+            card_inserted = false;
+            backing_mem = BigEndianMemory::new(len, None, false).unwrap();
+        }
+        (Self {
             state: Default::default(),
-            backing_mem: Mutex::new(BigEndianMemory::new(4194304000, Some("test.fat"), true).unwrap()),
+            backing_mem: Mutex::new(backing_mem),
             acmd: Default::default(),
             ocr: Default::default(),
             cid: Default::default(),
             rca: Default::default(),
-            csd: Default::default(),
+            csd: CsdReg::new_with_num_block(len / 512),
             selected: Default::default(),
             rw_index: Default::default(),
             rw_stop: Default::default(),
             tx_status: Default::default()
-        }
+        }, card_inserted)
     }
 }
 
@@ -257,15 +272,16 @@ impl Default for CidReg {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct CsdReg(u128);
 
-impl Default for CsdReg {
-    fn default() -> Self {
+impl CsdReg {
+    fn new_with_num_block(num_blocks: usize) -> Self {
+        let num_blocks = ((num_blocks & 0x3fffff) + 1) as u128; // mask to 22 bit, spec builds in an additional +1 as well.
         let x =
             (1 << 126) | //structure ver 2
             (0xe << 112) | // TAAC fixed defintion
             (0x32 << 96) | // trans speed for 25Mhz
             (0b010110110101 << 84) | // command classes - mandatory only
             (0x9 << 80) | // block len fixed to 512
-            (8191 << 48) | // (8191 + 1) * 512k = 4Gbyte card
+            (num_blocks << 48) | // (8191 + 1) * 512k = 4Gbyte card
             (1 << 46) | // erase block en fixed
             (0x7f << 39) | // sector size fixed
             (0b10 << 26) | //write speed factor fixed
