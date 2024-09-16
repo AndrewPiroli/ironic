@@ -7,12 +7,12 @@ use log::debug;
 use log::error;
 use log::log_enabled;
 use log::trace;
-
 use crate::bus::prim::*;
 use crate::bus::mmio::*;
 use crate::bus::task::*;
 use crate::bus::Bus;
-use card::*;
+pub use card::*;
+use crate::mem::BigEndianMemory;
 
 /// Changing this to false will disable DMA support
 const SDHC_ENABLE_DMA: bool = true;
@@ -25,6 +25,32 @@ pub enum SDHCTask {
     IOPoll,
     DoDMARead,
     DoDMAWrite,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The Transaction State of the emulated SD card.
+/// The SD Interface and Bus Tasks will check and update this as I/O is performed on the card
+pub enum DeviceTXStatus {
+    /// No Transaction in progress. The default state.
+    None,
+    /// A multi-block Read transaction has been issued, but the SD Interface hasn't told anyone yet.
+    MultiReadPending,
+    /// A multi-block Read transaction in progress, the SD Interface is redirecting reads from its Buffer Data Port to the Card's backing memory
+    MultiReadInProgress,
+    /// A multi-block Write transaction has been issued, but the SD Interface hasn't told anyone yet.
+    MultiWritePending,
+    /// A multi-block Read transaction in progress, the SD Interface is redirecting writes to it's Buffer Data Port to the Card's backing memory
+    MultiWriteInProgress,
+    /// The SD Interface is performing DMA Read operations on the Card's backing memory.
+    DMAReadInProgress,
+    /// The SD Interface is performing DMA Write operations on the Card's backing memory.
+    DMAWriteInProgress,
+}
+
+impl Default for DeviceTXStatus {
+    fn default() -> Self {
+        Self::None
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -186,7 +212,7 @@ impl SDRegisters {
             SDRegisters::SystemAddress
         )
     }
-    fn run_write_handler(&self, iface: &mut SDInterface, old: u32, new: u32) -> Option<SDHCTask> {
+    fn run_write_handler<D: SDHCDevice>(&self, iface: &mut SDInterface<D>, old: u32, new: u32) -> Option<SDHCTask> {
         let shift: usize;
         let mask: u32;
         if self.bytecount_of_reg() >= 4 {
@@ -208,7 +234,7 @@ impl SDRegisters {
                     dbg!(&x);
                 }
                 // let cmd = x.index;
-                if let Some(response) = iface.card.issue(x, iface.raw_read(SDRegisters::Argument.base_offset())){
+                if let Some(response) = iface.device.issue(x, iface.raw_read(SDRegisters::Argument.base_offset())){
                     self.apply_response(iface, response);
                 }
                 if iface.cmd_complete() {
@@ -224,8 +250,8 @@ impl SDRegisters {
                 // The host driver will write here to acknowledge a CMD complete
                 // If there is a pending transfer that's supposed to be associated with that command
                 // This is the time to kick it off.
-                match iface.card.tx_status {
-                    CardTXStatus::MultiReadPending => { // Multi Block Read
+                match iface.device.tx_status() {
+                    DeviceTXStatus::MultiReadPending => { // Multi Block Read
                         if new & 1 == 1 {
                             let use_dma = iface.raw_read(SDRegisters::TxMode.base_offset()) & 0x1 == 1;
                             if use_dma {
@@ -233,16 +259,16 @@ impl SDRegisters {
                                     error!(target:"SDHC", "Software Attempted to use DMA, which is disabled.");
                                     return None;
                                 }
-                                iface.card.tx_status = CardTXStatus::DMAReadInProgress;
+                                iface.device.set_tx_status(DeviceTXStatus::DMAReadInProgress);
                                 return Some(SDHCTask::DoDMARead);
                             }
                             else {
-                                iface.card.tx_status = CardTXStatus::MultiReadInProgress;
+                                iface.device.set_tx_status(DeviceTXStatus::MultiReadInProgress);
                                 return Some(SDHCTask::SendBufReadReady);
                             }
                         }
                     },
-                    CardTXStatus::MultiWritePending => {
+                    DeviceTXStatus::MultiWritePending => {
                         if new & 1 == 1 {
                             let use_dma = iface.raw_read(SDRegisters::TxMode.base_offset()) & 0x1 == 1;
                             if use_dma {
@@ -250,16 +276,16 @@ impl SDRegisters {
                                     error!(target:"SDHC", "Software Attempted to use DMA, which is disabled.");
                                     return None;
                                 }
-                                iface.card.tx_status = CardTXStatus::DMAWriteInProgress;
+                                iface.device.set_tx_status(DeviceTXStatus::DMAWriteInProgress);
                                 return Some(SDHCTask::DoDMAWrite);
                             }
                             else {
-                                iface.card.tx_status = CardTXStatus::MultiWriteInProgress;
+                                iface.device.set_tx_status(DeviceTXStatus::MultiWriteInProgress);
                                 return Some(SDHCTask::SendBufWriteReady);
                             }
                         }
                     },
-                    CardTXStatus::None | CardTXStatus::MultiReadInProgress | CardTXStatus::MultiWriteInProgress | CardTXStatus::DMAReadInProgress | CardTXStatus::DMAWriteInProgress => { // No action taken here
+                    DeviceTXStatus::None | DeviceTXStatus::MultiReadInProgress | DeviceTXStatus::MultiWriteInProgress | DeviceTXStatus::DMAReadInProgress | DeviceTXStatus::DMAWriteInProgress => { // No action taken here
                         return None;
                     },
                 }
@@ -304,24 +330,24 @@ impl SDRegisters {
                 else { unimplemented!("DAT and CMD line resets"); }
             },
             SDRegisters::BufferDataPort => {
-                match iface.card.tx_status {
-                    CardTXStatus::None |
-                    CardTXStatus::MultiReadPending |
-                    CardTXStatus::MultiReadInProgress |
-                    CardTXStatus::DMAReadInProgress |
-                    CardTXStatus::DMAWriteInProgress |
-                    CardTXStatus::MultiWritePending => {
+                match iface.device.tx_status() {
+                    DeviceTXStatus::None |
+                    DeviceTXStatus::MultiReadPending |
+                    DeviceTXStatus::MultiReadInProgress |
+                    DeviceTXStatus::DMAReadInProgress |
+                    DeviceTXStatus::DMAWriteInProgress |
+                    DeviceTXStatus::MultiWritePending => {
                         error!(target: "SDHC", "Software wrote to the BufferDataPort but there is no non-DMA write transaction.");
                         // intentionally drop the write here
                     }
-                    CardTXStatus::MultiWriteInProgress => {
-                        let index = iface.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
+                    DeviceTXStatus::MultiWriteInProgress => {
+                        let index = iface.device.data_index();
                         {
-                            let mut v = iface.card.backing_mem.lock();
-                            if v.data.len() < index+4 || index+4 > iface.card.rw_stop {
+                            let mut v = iface.device.lock_data();
+                            if v.data.len() < index+4 || index+4 > iface.device.data_stop() {
                                 return None;
                             }
-                            iface.card.rw_index.store(index+4, std::sync::atomic::Ordering::Relaxed);
+                            iface.device.set_data_index(index+4);
                             v.write(index, new).unwrap();
                         }
                     },
@@ -330,10 +356,10 @@ impl SDRegisters {
             SDRegisters::SystemAddress => {
                 iface.setreg(*self, new);
                 if old & 0xff00_0000 != new & 0xff00_0000 {
-                    if iface.card.tx_status == CardTXStatus::DMAReadInProgress {
+                    if iface.device.tx_status() == DeviceTXStatus::DMAReadInProgress {
                         return Some(SDHCTask::DoDMARead);
                     }
-                    else if iface.card.tx_status == CardTXStatus::DMAWriteInProgress {
+                    else if iface.device.tx_status() == DeviceTXStatus::DMAWriteInProgress {
                         return Some(SDHCTask::DoDMAWrite);
                     }
                 }
@@ -356,7 +382,7 @@ impl SDRegisters {
         }
         None
     }
-    fn apply_response(&self, iface: &mut SDInterface, response: Response) {
+    fn apply_response<D: SDHCDevice>(&self, iface: &mut SDInterface<D>, response: Response) {
         match response {
             Response::Regular(r) => {
                 iface.raw_write(SDRegisters::Response.base_offset(), r);
@@ -372,17 +398,17 @@ impl SDRegisters {
 }
 
 #[repr(C, align(64))]
-pub struct SDInterface {
+pub struct SDInterface<D: SDHCDevice> {
     register_file: [u8; 256],
     pending_interrupt_flags: u32,
     insert_raised: bool,
     first_ack: bool,
-    card: Card,
-    card_available: bool,
-    tx_status: CardTXStatus,
+    device: D,
+    device_available: bool,
+    device_tx_status: DeviceTXStatus,
 }
 
-impl SDInterface {
+impl<D: SDHCDevice> SDInterface<D> {
     fn raw_read(&self, off: usize) -> u32 {
         let p = (&self.register_file) as *const [u8;256] as *const u32;
         assert!(off & 0xffff_fffc == off); // alignment
@@ -464,7 +490,7 @@ impl SDInterface {
         *self = new;
     }
     fn insert_card(&mut self) -> bool {
-        if self.insert_raised || !self.card_available {
+        if self.insert_raised || !self.device_available {
             return false;
         }
         let current_state = self.raw_read(SDRegisters::PresentState.base_offset());
@@ -490,7 +516,7 @@ impl SDInterface {
     fn buffer_ready_read(&mut self) -> bool {
         let blocks_remaining = self.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
         if blocks_remaining > 0 {
-            self.card.rw_stop = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) + 512;
+            self.device.set_data_stop(self.device.data_index() + 512);
             self.setreg(SDRegisters::BlockCount, blocks_remaining.saturating_sub(1));
         }
         else {
@@ -508,7 +534,7 @@ impl SDInterface {
         let blocks_remaining = self.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16; // p83
         if blocks_remaining > 0 {
             // tell card it's rw_stop
-            self.card.rw_stop = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) + 512;
+            self.device.set_data_stop(self.device.data_index() + 512);
             self.setreg(SDRegisters::BlockCount, blocks_remaining.saturating_sub(1));
         }
         else {
@@ -524,26 +550,26 @@ impl SDInterface {
     }
     fn tx_complete(&mut self) -> bool {
         debug!(target: "SDHC", "Tx Complete");
-        match self.card.tx_status {
-            CardTXStatus::None |
-            CardTXStatus::MultiReadPending |
-            CardTXStatus::MultiWritePending => {
+        match self.device.tx_status() {
+            DeviceTXStatus::None |
+            DeviceTXStatus::MultiReadPending |
+            DeviceTXStatus::MultiWritePending => {
                 error!(target: "SDHC", "Requested Tx complete but no transfer is active.");
                 return false;
             },
-            CardTXStatus::MultiWriteInProgress => {
+            DeviceTXStatus::MultiWriteInProgress => {
                 // Clear Block Count Register
                 self.setreg(SDRegisters::BlockCount, 0);
                 // clear PS Buffer write enable & Write Tx Active & CMD Inhibit (DAT)
                 let ps = self.raw_read(SDRegisters::PresentState.base_offset());
                 const KILL_MASK: u32 = !(1 << 10 | 1 << 8 | 1 << 1);
                 self.setreg(SDRegisters::PresentState, ps & KILL_MASK);
-                self.card.tx_status = CardTXStatus::None;
-                self.card.state = CardState::Trans;
+                self.device.set_tx_status(DeviceTXStatus::None);
+                self.device.set_state(CardState::Trans);
                 const TRANSFER_COMPLETE_MASK: u32 = 1 << 1;
                 return self.raise_int(TRANSFER_COMPLETE_MASK);
             },
-            CardTXStatus::MultiReadInProgress => {
+            DeviceTXStatus::MultiReadInProgress => {
                 // Clear Block Count Register
                 self.setreg(SDRegisters::BlockCount, 0);
                 // clear PS Buffer read enable & Read Tx Active & CMD Inhibit (DAT)
@@ -551,31 +577,31 @@ impl SDInterface {
                 const KILL_MASK: u32 = !(1 << 11 | 1 << 9 | 1 << 1);
                 self.setreg(SDRegisters::PresentState, ps & KILL_MASK);
                 const TRANSFER_COMPLETE_MASK: u32 = 1 << 1;
-                self.card.tx_status = CardTXStatus::None;
-                self.card.state = CardState::Trans;
+                self.device.set_tx_status(DeviceTXStatus::None);
+                self.device.set_state(CardState::Trans);
                 return self.raise_int(TRANSFER_COMPLETE_MASK);
             },
-            CardTXStatus::DMAReadInProgress => {
+            DeviceTXStatus::DMAReadInProgress => {
                 // Clear Block Count Register
                 self.setreg(SDRegisters::BlockCount, 0);
                 // clear PS Read Tx Active & CMD Inhibit (DAT)
                 let ps = self.raw_read(SDRegisters::PresentState.base_offset());
                 const KILL_MASK: u32 = !(1 << 9 | 1 << 1);
                 self.setreg(SDRegisters::PresentState, ps & KILL_MASK);
-                self.card.tx_status = CardTXStatus::None;
-                self.card.state = CardState::Trans;
+                self.device.set_tx_status(DeviceTXStatus::None);
+                self.device.set_state(CardState::Trans);
                 const TRANSFER_COMPLETE_MASK: u32 = 1 << 1;
                 return self.raise_int(TRANSFER_COMPLETE_MASK);
             },
-            CardTXStatus::DMAWriteInProgress => {
+            DeviceTXStatus::DMAWriteInProgress => {
                 // Clear Block Count Register
                 self.setreg(SDRegisters::BlockCount, 0);
                 // clear PS Buffer  Write Tx Active & CMD Inhibit (DAT)
                 let ps = self.raw_read(SDRegisters::PresentState.base_offset());
                 const KILL_MASK: u32 = !(1 << 8 | 1 << 1);
                 self.setreg(SDRegisters::PresentState, ps & KILL_MASK);
-                self.card.tx_status = CardTXStatus::None;
-                self.card.state = CardState::Trans;
+                self.device.set_tx_status(DeviceTXStatus::None);
+                self.device.set_state(CardState::Trans);
                 const TRANSFER_COMPLETE_MASK: u32 = 1 << 1;
                 return self.raise_int(TRANSFER_COMPLETE_MASK);
             }
@@ -583,26 +609,26 @@ impl SDInterface {
     }
     fn dma_int(&mut self) -> bool {
         const DMA_INT: u32 = 1 << 3;
-        match self.tx_status {
-            CardTXStatus::None |
-            CardTXStatus::MultiReadPending |
-            CardTXStatus::MultiReadInProgress |
-            CardTXStatus::MultiWritePending |
-            CardTXStatus::MultiWriteInProgress => {
+        match self.device_tx_status {
+            DeviceTXStatus::None |
+            DeviceTXStatus::MultiReadPending |
+            DeviceTXStatus::MultiReadInProgress |
+            DeviceTXStatus::MultiWritePending |
+            DeviceTXStatus::MultiWriteInProgress => {
                 error!(target: "SDHC", "Asked for a DMA Interrupt but no DMA transfer is in progress");
                 return false;
             },
-            CardTXStatus::DMAReadInProgress | CardTXStatus::DMAWriteInProgress  => {
+            DeviceTXStatus::DMAReadInProgress | DeviceTXStatus::DMAWriteInProgress  => {
                 return self.raise_int(DMA_INT);
             },
         }
     }
 }
 
-impl Default for SDInterface {
+impl<D: SDHCDevice> Default for SDInterface<D> {
     fn default() -> Self {
-        let (card, card_available) = Card::try_new();
-        let mut new = Self { register_file: [0;256], pending_interrupt_flags: 0, insert_raised: false, first_ack: false, card, card_available, tx_status: CardTXStatus::None };
+        let (card, card_available) = D::try_new();
+        let mut new = Self { register_file: [0;256], pending_interrupt_flags: 0, insert_raised: false, first_ack: false, device: card, device_available: card_available, device_tx_status: DeviceTXStatus::None };
         // Fill HWInit registers
         // Capabilities Register
         const VOLTAGE_SUPPORT_3_3V: u32 = 1 << 24;
@@ -618,27 +644,27 @@ impl Default for SDInterface {
     }
 }
 
-impl MmioDevice for SDInterface {
+impl<D: SDHCDevice> MmioDevice for SDInterface<D> {
     type Width = u32;
 
     fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
         trace!(target: "SDHC", "MMIO read: 0x{off:x}");
         if off == SDRegisters::BufferDataPort.base_offset() {
-            match self.card.tx_status {
-                CardTXStatus::None |
-                CardTXStatus::MultiReadPending |
-                CardTXStatus::MultiWritePending |
-                CardTXStatus::MultiWriteInProgress |
-                CardTXStatus::DMAReadInProgress |
-                CardTXStatus::DMAWriteInProgress => { error!(target: "SDHC", "Software tried reading the BufferDataPort but there is no non-DMA read transaction."); }
-                CardTXStatus::MultiReadInProgress => {
-                    let index = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
+            match self.device.tx_status() {
+                DeviceTXStatus::None |
+                DeviceTXStatus::MultiReadPending |
+                DeviceTXStatus::MultiWritePending |
+                DeviceTXStatus::MultiWriteInProgress |
+                DeviceTXStatus::DMAReadInProgress |
+                DeviceTXStatus::DMAWriteInProgress => { error!(target: "SDHC", "Software tried reading the BufferDataPort but there is no non-DMA read transaction."); }
+                DeviceTXStatus::MultiReadInProgress => {
+                    let index = self.device.data_index();
                     {
-                        let v = self.card.backing_mem.lock();
-                        if v.data.len() < index+4 || index+4 > self.card.rw_stop {
-                            return Err(anyhow!("out of range! {index:?} {:?} {} ", v.data.len(), self.card.rw_stop));
+                        let v = self.device.lock_data();
+                        if v.data.len() < index+4 || index+4 > self.device.data_stop() {
+                            return Err(anyhow!("out of range! {index:?} {:?} {} ", v.data.len(), self.device.data_stop()));
                         }
-                        self.card.rw_index.store(index+4, std::sync::atomic::Ordering::Relaxed);
+                        self.device.set_data_index(index+4);
                         let ret: u32 = v.read(index).unwrap();
                         return Ok(BusPacket::Word(ret));
                     }
@@ -741,10 +767,10 @@ impl Bus {
                 debug!(target: "SDHC", "Starting DMA Read Tx to sysaddr: {sysaddr:x}");
                 let mut local_buf = vec![0;512];
                 while current_addr+512 < stop_addr && block_count > 0 {
-                    let offset = self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
-                    self.sd0.card.backing_mem.lock().read_buf(offset, &mut local_buf).unwrap();
+                    let offset = self.sd0.device.rw_index.load(std::sync::atomic::Ordering::Relaxed);
+                    self.sd0.device.backing_mem.lock().read_buf(offset, &mut local_buf).unwrap();
                     self.dma_write(current_addr, &local_buf).unwrap();
-                    self.sd0.card.rw_index.store(offset + 512, std::sync::atomic::Ordering::Relaxed);
+                    self.sd0.device.rw_index.store(offset + 512, std::sync::atomic::Ordering::Relaxed);
                     local_buf.fill(0);
                     block_count -= 1;
                     current_addr += 512;
@@ -781,9 +807,9 @@ impl Bus {
                 let mut local_buf = vec![0;512];
                 while current_addr+512 < stop_addr && block_count > 0 {
                     self.dma_read(current_addr, &mut local_buf).unwrap();
-                    let offset = self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
-                    self.sd0.card.backing_mem.lock().write_buf(offset, &local_buf).unwrap();
-                    self.sd0.card.rw_index.store(offset + 512, std::sync::atomic::Ordering::Relaxed);
+                    let offset = self.sd0.device.rw_index.load(std::sync::atomic::Ordering::Relaxed);
+                    self.sd0.device.backing_mem.lock().write_buf(offset, &local_buf).unwrap();
+                    self.sd0.device.rw_index.store(offset + 512, std::sync::atomic::Ordering::Relaxed);
                     local_buf.fill(0);
                     block_count -= 1;
                     current_addr += 512;
@@ -808,17 +834,17 @@ impl Bus {
                 }
             }
             SDHCTask::IOPoll => {
-                let rw_index = self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
-                trace!(target: "SDHC", "SDHC IOPOLL {} {}", rw_index, self.sd0.card.rw_stop);
-                match self.sd0.card.tx_status {
-                    CardTXStatus::None |
-                    CardTXStatus::MultiReadPending |
-                    CardTXStatus::MultiWritePending => {},
-                    CardTXStatus::DMAReadInProgress | CardTXStatus::DMAWriteInProgress => {
+                let rw_index = self.sd0.device.rw_index.load(std::sync::atomic::Ordering::Relaxed);
+                trace!(target: "SDHC", "SDHC IOPOLL {} {}", rw_index, self.sd0.device.rw_stop);
+                match self.sd0.device.tx_status() {
+                    DeviceTXStatus::None |
+                    DeviceTXStatus::MultiReadPending |
+                    DeviceTXStatus::MultiWritePending => {},
+                    DeviceTXStatus::DMAReadInProgress | DeviceTXStatus::DMAWriteInProgress => {
                         error!(target: "SDHC", "Improper state for SDHC IOPOLLing.");
                     }
-                    CardTXStatus::MultiReadInProgress => {
-                        if rw_index >= self.sd0.card.rw_stop {
+                    DeviceTXStatus::MultiReadInProgress => {
+                        if rw_index >= self.sd0.device.rw_stop {
                             let blocks_remain = self.sd0.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
                             if blocks_remain > 0 {
                                 self.tasks.push(
@@ -835,8 +861,8 @@ impl Bus {
                             );
                         }
                     },
-                    CardTXStatus::MultiWriteInProgress => {
-                        if rw_index >= self.sd0.card.rw_stop {
+                    DeviceTXStatus::MultiWriteInProgress => {
+                        if rw_index >= self.sd0.device.rw_stop {
                             let blocks_remain = self.sd0.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
                             if blocks_remain > 0 {
                                 self.tasks.push(
@@ -855,6 +881,64 @@ impl Bus {
                     }
                 }
             },
+        }
+    }
+}
+
+pub trait SDHCDevice: Sized {
+    fn try_new() -> (Self, bool);
+    /// Issue a command to the emulated SD device.
+    fn issue(&mut self, cmd: Command, argument: u32) -> Option<Response>;
+    fn tx_status(&self) -> DeviceTXStatus;
+    fn set_tx_status(&mut self, new: DeviceTXStatus);
+    fn _state(&self) -> CardState;
+    fn set_state(&mut self, new: CardState);
+    fn data_index(&self) -> usize;
+    fn set_data_index(&self, new: usize);
+    fn data_stop(&self) -> usize;
+    fn set_data_stop(&mut self, new: usize);
+    fn lock_data(&self) -> parking_lot::MutexGuard<BigEndianMemory>;
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+/// Card States as defined in Part 1
+pub enum CardState {
+    Idle,
+    Ready,
+    Ident,
+    Stby,
+    Trans,
+    Data,
+    Rcv,
+    Prg,
+    Dis,
+    Ina,
+}
+
+impl Default for CardState {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+impl CardState {
+    // Part1 simplified version 2 - Table 4-35
+    fn bits_for_card_status(&self) -> u8 {
+        match self {
+            Self::Idle => 0,
+            Self::Ready => 1,
+            Self::Ident => 2,
+            Self::Stby => 3,
+            Self::Trans => 4,
+            Self::Data => 5,
+            Self::Rcv => 6,
+            Self::Prg => 7,
+            Self::Dis => 8,
+            Self::Ina => panic!(),
+            // 9-14 reserved
+            // 15 reserved for io mode
         }
     }
 }

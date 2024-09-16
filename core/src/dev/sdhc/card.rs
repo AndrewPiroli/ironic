@@ -1,33 +1,9 @@
 use std::{num::NonZeroU16, sync::atomic::AtomicUsize};
+use std::sync::atomic::Ordering;
 use log::debug;
-
+use parking_lot::{Mutex, MutexGuard};
+use super::{CardState, DeviceTXStatus, SDHCDevice};
 use crate::mem::BigEndianMemory;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// The Transaction State of the emulated SD card.
-/// The SD Interface and Bus Tasks will check and update this as I/O is performed on the card
-pub(super) enum CardTXStatus {
-    /// No Transaction in progress. The default state.
-    None,
-    /// A multi-block Read transaction has been issued, but the SD Interface hasn't told anyone yet.
-    MultiReadPending,
-    /// A multi-block Read transaction in in progress, the SD Interface is redirecting reads from it's Buffer Data Port to the Card's backing memory
-    MultiReadInProgress,
-    /// A multi-block Write transaction has been issued, but the SD Interface hasn't told anyone yet.
-    MultiWritePending,
-    /// A multi-block Read transaction in in progress, the SD Interface is redirecting writes to it's Buffer Data Port to the Card's backing memory
-    MultiWriteInProgress,
-    /// The SD Interface is performing DMA Read operations on the Card's backing memory.
-    DMAReadInProgress,
-    /// The SD Interface is performing DMA Write operations on the Card's backing memory.
-    DMAWriteInProgress,
-}
-
-impl Default for CardTXStatus {
-    fn default() -> Self {
-        Self::None
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct Command {
@@ -73,9 +49,9 @@ impl CommandType {
         }
     }
 }
-use parking_lot::Mutex;
+
 #[derive(Debug)]
-pub(super) struct Card {
+pub struct Card {
     pub state: CardState,
     pub backing_mem: Mutex<BigEndianMemory>,
     acmd: bool,
@@ -90,17 +66,17 @@ pub(super) struct Card {
     pub rw_index: AtomicUsize,
     /// The end address for the multi-block transfer. Should equal the initial rw_index + BlockCount*BlockSize
     pub rw_stop: usize,
-    pub tx_status: CardTXStatus,
+    pub tx_status: DeviceTXStatus,
 }
 
-impl Card {
-    pub(super) fn try_new() -> (Self, bool) {
+impl SDHCDevice for Card {
+    fn try_new() -> (Self, bool) {
         const FILENAME: &str = "sd.img";
         let mut len = 0usize;
         let backing_mem: BigEndianMemory;
         let mut card_inserted = true;
         if let Ok(f) = std::fs::File::open(FILENAME)
-        && let Ok(metadata) = f.metadata() {
+            && let Ok(metadata) = f.metadata() {
             len = metadata.len() as usize;
             backing_mem = BigEndianMemory::new(len, Some(FILENAME), false).unwrap_or_else(|_|{
                 card_inserted = false;
@@ -125,11 +101,8 @@ impl Card {
             tx_status: Default::default()
         }, card_inserted)
     }
-}
-
-impl Card {
     /// Issue a command to the emulated SD card. Unimplemented commands will terminate the emulator.
-    pub(super) fn issue(&mut self, cmd: Command, argument: u32) -> Option<Response> {
+    fn issue(&mut self, cmd: Command, argument: u32) -> Option<Response> {
         let acmd = std::mem::replace(&mut self.acmd, false);
         match (acmd, cmd.index) {
             (false, 0) => { return Some(self.cmd0(argument)); },
@@ -151,6 +124,36 @@ impl Card {
             _ => unimplemented!(),
         }
     }
+    fn tx_status(&self) -> DeviceTXStatus {
+        self.tx_status
+    }
+    fn set_tx_status(&mut self, new: DeviceTXStatus) {
+        self.tx_status = new;
+    }
+    fn _state(&self) -> CardState {
+        self.state
+    }
+    fn set_state(&mut self, new: CardState) {
+        self.state = new;
+    }
+    fn data_index(&self) -> usize {
+        self.rw_index.load(Ordering::Relaxed)
+    }
+    fn set_data_index(&self, new: usize) {
+        self.rw_index.store(new, Ordering::Relaxed)
+    }
+    fn data_stop(&self) -> usize {
+        self.rw_stop
+    }
+    fn set_data_stop(&mut self, new: usize) {
+        self.rw_stop = new;
+    }
+    fn lock_data(&self) -> MutexGuard<BigEndianMemory> {
+        self.backing_mem.lock()
+    }
+}
+
+impl Card {
     fn cmd8(&mut self, argument: u32) -> Response {
         // CMD8 echo back in response
         Response::Regular(argument & 0xfff)
@@ -218,7 +221,7 @@ impl Card {
         self.state = CardState::Data;
         self.rw_index.store(argument as usize * 512 , std::sync::atomic::Ordering::Relaxed);
         let response = (self.state.bits_for_card_status() as u32) << 9;
-        self.tx_status = CardTXStatus::MultiReadPending;
+        self.tx_status = DeviceTXStatus::MultiReadPending;
         Response::Regular(response)
     }
     fn cmd25(&mut self, argument: u32) -> Response {
@@ -226,7 +229,7 @@ impl Card {
         self.state = CardState::Rcv;
         self.rw_index.store(argument as usize * 512 , std::sync::atomic::Ordering::Relaxed);
         let response = (self.state.bits_for_card_status() as u32) << 9;
-        self.tx_status = CardTXStatus::MultiWritePending;
+        self.tx_status = DeviceTXStatus::MultiWritePending;
         Response::Regular(response)
     }
 }
@@ -234,53 +237,12 @@ impl Card {
 #[derive(Debug, Clone, Copy, PartialEq)]
 /// The card response to commands.
 /// Different types are for mapping the Part 1 response field bits to Part 2 Response Register bits
-pub(super) enum Response {
+pub enum Response {
     /// R1, R3, R4, R5, R6, R7. Part 1 [39:8] to Part 2 [31:0]
     Regular(u32),
     // AutoCMD12(u32), // Part 1 [39:8] to Part 2 [127:96]
     /// Part 1 [127:8] to Part 2 [119:0]
     R2(u128),
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-/// Card States as defined in Part 1
-pub(super) enum CardState {
-    Idle,
-    Ready,
-    Ident,
-    Stby,
-    Trans,
-    Data,
-    Rcv,
-    Prg,
-    Dis,
-    Ina,
-}
-impl Default for CardState {
-    fn default() -> Self {
-        Self::Idle
-    }
-}
-impl CardState {
-    // Part1 simplified version 2 - Table 4-35
-    fn bits_for_card_status(&self) -> u8 {
-        match self {
-            Self::Idle => 0,
-            Self::Ready => 1,
-            Self::Ident => 2,
-            Self::Stby => 3,
-            Self::Trans => 4,
-            Self::Data => 5,
-            Self::Rcv => 6,
-            Self::Prg => 7,
-            Self::Dis => 8,
-            Self::Ina => panic!(),
-            // 9-14 reserved
-            // 15 reserved for io mode
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

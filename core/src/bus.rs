@@ -20,6 +20,7 @@ use gimli::BigEndian;
 use gimli::DebugFrame;
 use gimli::Dwarf;
 use gimli::EndianArcSlice;
+use crate::dev;
 
 #[derive(Default)]
 pub struct DebugInfo {
@@ -49,7 +50,7 @@ pub struct Bus {
     pub ehci: EhcInterface,
     pub ohci0: OhcInterface,
     pub ohci1: OhcInterface,
-    pub sd0: SDInterface,
+    pub sd0: SDInterface<dev::sdhc::Card>,
     pub sd1: WLANInterface,
 
     /// True when the ROM mapping is disabled.
