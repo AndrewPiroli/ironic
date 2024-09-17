@@ -246,15 +246,21 @@ impl InterpBackend {
 
     /// Skyeye intentionally kills a bunch of threads, specifically NCD, KD,
     /// WL, and WD; presumably to avoid having to deal with emulating WLAN.
+
+    // As we move toward enabling WLAN, this can be removed
+    #[allow(unreachable_code)]
     pub fn hotpatch_check(&mut self) -> anyhow::Result<()> {
+        // return Ok(());
         use ironic_core::cpu::mmu::prim::{TLBReq, Access};
         if self.boot_status == BootStatus::IOSKernel {
             let pc = self.cpu.read_fetch_pc();
+            // NCD and WD seem to be ok, KD and WL are having some problems still.
             let vaddr = match pc {
-                0x13d9_0024 | // NCD
-                0x13db_0024 | // KD
-                0x13ed_0024 | // WL
-                0x13eb_0024 => Some(pc), // WD
+                // 0x13d9_0024 | // NCD
+                 0x13db_0024 | // KD x
+                 0x13ed_0024  // WL x
+                // 0x13eb_0024  //WD
+                => Some(pc),
                 _ => None
             };
             if let Some(vaddr) = vaddr {

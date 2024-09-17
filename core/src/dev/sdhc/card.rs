@@ -2,53 +2,8 @@ use std::{num::NonZeroU16, sync::atomic::AtomicUsize};
 use std::sync::atomic::Ordering;
 use log::debug;
 use parking_lot::{Mutex, MutexGuard};
-use super::{CardState, DeviceTXStatus, SDHCDevice};
+use super::{CardState, DeviceTXStatus, SDHCDevice, Command};
 use crate::mem::BigEndianMemory;
-
-#[derive(Debug, Clone)]
-pub struct Command {
-    pub index: u8,
-    _ty: CommandType,
-    _data_present: bool,
-    // command_idx_ck: bool,
-    // crc_ck: bool,
-    _response: bool,
-}
-
-impl From<u32> for Command {
-    fn from(value: u32) -> Self {
-            Self {
-                index: ((value & 0x3f00) >> 8) as u8,
-                _ty: CommandType::new(((value & (1<<6)) >> 6) == 1, ((value & (1<<7)) >> 7) == 1),
-                _data_present: ((value & (1<<5)) >> 5 == 1),
-                // command_idx_ck: ((value & (1<<4)) >> 5 == 1),
-                // crc_ck: ((value & (1<<3)) >> 5 == 1),
-                _response: value & 0b11 != 0,
-            }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum CommandType {
-    /// CMD12, CMD52 for writing I/O Abort in CCCR
-    Abort,
-    /// CMD52 for writing Function Select in CCCR
-    Resume,
-    /// CMD 52 for writing Bus Suspend in CCCR
-    Suspend,
-    /// All other commands
-    Normal,
-}
-impl CommandType {
-    fn new(bit6: bool, bit7: bool) -> Self {
-        match (bit6, bit7) {
-            (true, true) => Self::Abort,
-            (true, false) => Self::Resume,
-            (false, true) => Self::Suspend,
-            (false, false) => Self::Normal,
-        }
-    }
-}
 
 #[derive(Debug)]
 pub struct Card {
