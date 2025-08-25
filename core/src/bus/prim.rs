@@ -90,7 +90,7 @@ pub enum IoDevice {
 pub enum BusPacket { Byte(u8), Half(u16), Word(u32) }
 
 /// The width of an access on the bus.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BusWidth { B, H, W }
 
 /// An abstract request on the bus.
