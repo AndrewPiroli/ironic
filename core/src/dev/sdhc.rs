@@ -742,7 +742,7 @@ impl Bus {
                 let mut local_buf = vec![0;512];
                 while current_addr+512 < stop_addr && block_count > 0 {
                     let offset = self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
-                    self.sd0.card.backing_mem.lock().read_buf(offset, &mut local_buf).unwrap();
+                    self.sd0.card.backing_mem.lock().read_buf(offset, &mut local_buf, false).unwrap();
                     self.dma_write(current_addr, &local_buf).unwrap();
                     self.sd0.card.rw_index.store(offset + 512, std::sync::atomic::Ordering::Relaxed);
                     local_buf.fill(0);
@@ -782,7 +782,7 @@ impl Bus {
                 while current_addr+512 < stop_addr && block_count > 0 {
                     self.dma_read(current_addr, &mut local_buf).unwrap();
                     let offset = self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
-                    self.sd0.card.backing_mem.lock().write_buf(offset, &local_buf).unwrap();
+                    self.sd0.card.backing_mem.lock().write_buf(offset, &local_buf, false).unwrap();
                     self.sd0.card.rw_index.store(offset + 512, std::sync::atomic::Ordering::Relaxed);
                     local_buf.fill(0);
                     block_count -= 1;

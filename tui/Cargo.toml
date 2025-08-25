@@ -9,6 +9,7 @@ edition = "2024"
 [dependencies]
 ironic-core = { path = "../core" }
 ironic-backend = { path = "../back" }
+ironic-remote = { path = "../remote" }
 
 clap = { version = "4.2.1", features = ["std", "derive", "suggestions", "color", "wrap_help"]}
 anyhow = { version = "1.0.40", features = ["std", "backtrace"] }

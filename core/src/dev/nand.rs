@@ -151,11 +151,13 @@ impl NandInterface {
     }
     /// Read data from the specified offset in the NAND flash into some buffer
     pub fn read_data(&self, off: usize, dst: &mut [u8]) -> anyhow::Result<()> {
-        self.data.read_buf(off, dst)
+        self.data.read_buf(off, dst, false)?;
+        Ok(())
     }
     /// Write the provided data to the specified offset in the NAND flash
     pub fn write_data(&mut self, off: usize, src: &[u8]) -> anyhow::Result<()> {
-        self.data.write_buf(off, src)
+        self.data.write_buf(off, src, false)?;
+        Ok(())
     }
     /// Zero out the provided region in the NAND flash
     pub fn clear_data(&mut self, off: usize, len: usize) -> anyhow::Result<()> {

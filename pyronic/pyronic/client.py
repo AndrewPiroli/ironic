@@ -103,12 +103,12 @@ class IPCClient(object):
         buf = self.alloc_buf(inpath.encode('utf-8') + b'\x00')
         msg = IPCMsg(self.IPC_OPEN, fd=0, args=[buf.paddr, mode])
         res = self.guest_ipc(msg)
-        return unpack(">i", res.read()[4:8])[0]
+        return unpack(">i", res.read()[4:8])[0] # pyright: ignore[reportOptionalMemberAccess]
 
     def IOSClose(self, fd):
         msg = IPCMsg(self.IPC_CLOSE, fd=fd)
         res = self.guest_ipc(msg)
-        return unpack(">i", res.read()[4:8])[0]
+        return unpack(">i", res.read()[4:8])[0] # pyright: ignore[reportOptionalMemberAccess]
 
     def __ioctlv_parse(self, fmt, args):
         """ Parse some ioctlv arguments into a set of memory handles """
@@ -166,9 +166,9 @@ class IPCClient(object):
             self.guest_ipc(msg, noret=True)
             return
         res = self.guest_ipc(msg)
-        return unpack(">i", res.read()[4:8])[0]
+        return unpack(">i", res.read()[4:8])[0] # pyright: ignore[reportOptionalMemberAccess]
 
     def IOSIoctl(self, fd, cmd, h_in: MemHandle, h_out: MemHandle):
         msg = IPCMsg(self.IPC_IOCTL, fd=fd, args=[cmd, h_in.paddr, h_in.size, h_out.paddr, h_out.size])
         res = self.guest_ipc(msg)
-        return unpack(">i", res.read()[4:8])[0]
+        return unpack(">i", res.read()[4:8])[0] # pyright: ignore[reportOptionalMemberAccess]

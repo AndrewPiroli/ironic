@@ -51,11 +51,22 @@ impl Bus {
 
     /// Perform a DMA write operation.
     pub fn dma_write(&mut self, addr: u32, buf: &[u8]) -> anyhow::Result<()> {
-        self.do_dma_write(addr, buf)
+        self.do_dma_write(addr, buf, false)?;
+        Ok(())
     }
     /// Perform a DMA read operation.
     pub fn dma_read(&self, addr: u32, buf: &mut [u8]) -> anyhow::Result<()> {
-        self.do_dma_read(addr, buf)
+        self.do_dma_read(addr, buf, false)?;
+        Ok(())
+    }
+
+    /// Perform a DMA write operation.
+    pub fn debug_write(&mut self, addr: u32, buf: &[u8]) -> anyhow::Result<usize> {
+        self.do_dma_write(addr, buf, true)
+    }
+    /// Perform a DMA read operation.
+    pub fn debug_read(&self, addr: u32, buf: &mut [u8]) -> anyhow::Result<usize> {
+        self.do_dma_read(addr, buf, true)
     }
 
 }
@@ -133,7 +144,7 @@ impl Bus {
 
 impl Bus {
     /// Dispatch a DMA write to some memory device.
-    fn do_dma_write(&mut self, addr: u32, buf: &[u8]) -> anyhow::Result<()> {
+    fn do_dma_write(&mut self, addr: u32, buf: &[u8], permissive: bool) -> anyhow::Result<usize> {
         use MemDevice::*;
         let handle = match self.decode_phys_addr(addr){
             Some(val) => val,
@@ -143,21 +154,21 @@ impl Bus {
         };
 
         let off = (addr & handle.mask) as usize;
-        match handle.dev {
+        let cnt = match handle.dev {
             Device::Mem(dev) => { match dev {
                 MaskRom => { bail!("Bus error: DMA write on mask ROM"); },
-                Sram0   => self.sram0.write_buf(off, buf)?,
-                Sram1   => self.sram1.write_buf(off, buf)?,
-                Mem1    => self.mem1.write_buf(off, buf)?,
-                Mem2    => self.mem2.write_buf(off, buf)?,
+                Sram0   => self.sram0.write_buf(off, buf, permissive)?,
+                Sram1   => self.sram1.write_buf(off, buf, permissive)?,
+                Mem1    => self.mem1.write_buf(off, buf, permissive)?,
+                Mem2    => self.mem2.write_buf(off, buf, permissive)?,
             }},
             _ => { bail!("Bus error: DMA write on memory-mapped I/O region"); },
-        }
-        Ok(())
+        };
+        Ok(cnt)
     }
 
     /// Dispatch a DMA read to some memory device.
-    fn do_dma_read(&self, addr: u32, buf: &mut [u8]) -> anyhow::Result<()> {
+    fn do_dma_read(&self, addr: u32, buf: &mut [u8], permissive: bool) -> anyhow::Result<usize> {
         use MemDevice::*;
         let handle = match self.decode_phys_addr(addr) {
                 Some(val) => val,
@@ -165,17 +176,18 @@ impl Bus {
         };
 
         let off = (addr & handle.mask) as usize;
-        match handle.dev {
+        let cnt = match handle.dev {
             Device::Mem(dev) => { match dev {
+                MaskRom if permissive => self.mrom.read_buf(off, buf, true)?,
                 MaskRom => { bail!("Bus error: DMA read on mask ROM".to_string()); },
-                Sram0   => self.sram0.read_buf(off, buf)?,
-                Sram1   => self.sram1.read_buf(off, buf)?,
-                Mem1    => self.mem1.read_buf(off, buf)?,
-                Mem2    => self.mem2.read_buf(off, buf)?,
+                Sram0   => self.sram0.read_buf(off, buf, permissive)?,
+                Sram1   => self.sram1.read_buf(off, buf, permissive)?,
+                Mem1    => self.mem1.read_buf(off, buf, permissive)?,
+                Mem2    => self.mem2.read_buf(off, buf, permissive)?,
             }},
             _ => { bail!("Bus error: DMA read on memory-mapped I/O region".to_string()); },
-        }
-        Ok(())
+        };
+        Ok(cnt)
     }
 }
 

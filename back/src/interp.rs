@@ -6,7 +6,9 @@ pub mod dispatch;
 pub mod lut;
 
 use anyhow::anyhow;
+use fxhash::FxHashSet;
 use gimli::{BigEndian, read::*};
+use ironic_core::bus::prim::BusWidth;
 use log::{error, info};
 use parking_lot::RwLock;
 
@@ -27,6 +29,7 @@ use ironic_core::bus::*;
 use ironic_core::cpu::{Cpu, CpuRes};
 use ironic_core::cpu::reg::Reg;
 use ironic_core::cpu::excep::ExceptionType;
+use ironic_core::dbg::DebugProxy;
 
 static PPC_EARLY_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -60,6 +63,20 @@ pub enum BootStatus {
     UserKernel, 
 }
 
+enum DebugState {
+    Run,
+    Pause,
+    SingleStep,
+    DoneStepPause,
+    HitBkpt,
+}
+
+struct Debugger {
+    state: DebugState,
+    proxy: DebugProxy,
+    bkpts: FxHashSet<u32>,
+}
+
 /// Backend for interpreting-style emulation. 
 ///
 /// Right now, the main loop works like this:
@@ -90,14 +107,15 @@ pub struct InterpBackend {
     /// Current stage in the platform boot process.
     pub boot_status: BootStatus,
     pub custom_kernel: Option<String>,
-    debugger_attached: bool,
+    debugger: Option<Debugger>,
 }
 impl InterpBackend {
-    pub fn new(bus: Arc<RwLock<Bus>>, custom_kernel: Option<String>, ppc_early_on: bool) -> Self {
+    pub fn new(bus: Arc<RwLock<Bus>>, custom_kernel: Option<String>, ppc_early_on: bool, debugger: Option<DebugProxy>) -> Self {
         if ppc_early_on {
             PPC_EARLY_ON.store(true, std::sync::atomic::Ordering::Release);
         }
-        InterpBackend {
+
+        let mut ret = InterpBackend {
             svc_buf: String::new(),
             cpu: Cpu::new(bus.clone()),
             boot_status: BootStatus::Boot0,
@@ -105,8 +123,12 @@ impl InterpBackend {
             bus_cycle: 0,
             bus,
             custom_kernel,
-            debugger_attached: false,
+            debugger: None,
+        };
+        if let Some(proxy) = debugger {
+            ret.debugger = Some(Debugger { state: DebugState::DoneStepPause, proxy: proxy, bkpts: FxHashSet::default() });
         }
+        ret
     }
 }
 
@@ -320,7 +342,7 @@ impl InterpBackend {
         // Depending on the instruction, adjust the program counter
         let cpu_res = match disp_res {
             DispatchRes::Breakpoint => {
-                self.debugger_attached = true;
+                // self.debugger_attached = true;
                 self.cpu.increment_pc();
                 CpuRes::StepOk
             }
@@ -368,6 +390,166 @@ impl InterpBackend {
         self.update_boot_status();
         cpu_res
     }
+
+    fn remote_dbg(&mut self) -> bool {
+        use ironic_core::dbg::DebugCommands;
+        use ironic_core::cpu::mmu::prim::*;
+        use ironic_core::cpu::reg::Reg;
+        use ironic_core::cpu::psr::Psr;
+        use core::ptr::copy_nonoverlapping;
+        let debugger = self.debugger.as_mut().unwrap();
+        let x = &debugger.proxy;
+        let (tx, rx) = (&x.emu_tx, &x.emu_rx);
+        loop {
+            if let DebugState::DoneStepPause | DebugState::HitBkpt = debugger.state {
+                debugger.state = DebugState::Pause;
+            }
+            match rx.recv_timeout(Duration::from_nanos(1)) {
+                Ok(dc) => match dc {
+                    DebugCommands::ReadRegs(_) => {
+                        let mut reply = [0u32;17];
+                        unsafe {
+                            copy_nonoverlapping(self.cpu.reg.r.as_ptr(), reply.as_mut_ptr(), 13);
+                        }
+                        reply[13] = self.cpu.reg[Reg::Sp];
+                        reply[14] = self.cpu.reg[Reg::Lr];
+                        reply[15] = self.cpu.read_fetch_pc();
+                        reply[16] = self.cpu.reg.cpsr.0;
+                        tx.send(DebugCommands::ReadRegs(reply)).unwrap();
+                    },
+                    DebugCommands::WriteRegs(new_regs) => {
+                        unsafe {
+                            copy_nonoverlapping(new_regs.as_ptr(), self.cpu.reg.r.as_mut_ptr(), 13);
+                        }
+                        self.cpu.reg[Reg::Sp] = new_regs[13];
+                        self.cpu.reg[Reg::Lr] = new_regs[14];
+                        self.cpu.write_exec_pc(new_regs[15]);
+                        self.cpu.reg.cpsr = Psr(new_regs[16]);
+                        tx.send(DebugCommands::Ack).unwrap();
+                    },
+                    DebugCommands::Step(n) => {
+                        if n > 1 { unimplemented!() }
+                        debugger.state = DebugState::SingleStep;
+                        tx.send(DebugCommands::Ack).unwrap();
+                    },
+                    DebugCommands::Peek(peek_va, org, sz ) => {
+                        use ironic_core::bus::prim::BusWidth;
+                        let sz = sz.0 as usize;
+                        let pa = self.cpu.translate(TLBReq { vaddr: VirtAddr(peek_va), kind: Access::Debug }).unwrap();
+                        let mut data = vec!(0u8; sz);
+                        {
+                            let bus = self.bus.write();
+                            match org {
+                                BusWidth::B => {
+                                    bus.debug_read(pa, &mut data).unwrap();
+                                },
+                                BusWidth::H => {
+                                    let mut unfortunate_memcpy = vec!(0u16;(sz / 2) + 1);
+                                    let org_len = sz / 2;
+                                    for i in 0..org_len {
+                                        unfortunate_memcpy[i] = u16::from_be(bus.read16(pa + (2*i as u32)).unwrap());
+                                    }
+                                    data.copy_from_slice(unsafe { core::slice::from_raw_parts(unfortunate_memcpy.as_ptr() as *const u8, sz) });
+                                },
+                                BusWidth::W => {
+                                    let mut unfortunate_memcpy = vec!(0u32;(sz / 4) + 1);
+                                    let org_len = sz / 4;
+                                    for i in 0..org_len {
+                                        unfortunate_memcpy[i] = u32::from_be(bus.read32(pa + (4*i as u32)).unwrap());
+                                    }
+                                    data.copy_from_slice(unsafe { core::slice::from_raw_parts(unfortunate_memcpy.as_ptr() as *const u8, sz) });
+                                },
+                            }
+                        }
+                        data.truncate(sz);
+                        tx.send(DebugCommands::Data(data.into_boxed_slice())).unwrap();
+                    },
+                    DebugCommands::Poke(poke_va, org, data) => {
+                        let pa = self.cpu.translate(TLBReq { vaddr: VirtAddr(poke_va), kind: Access::Debug }).unwrap();
+                        {
+                            let mut bus = self.bus.write();
+                            match org {
+                                BusWidth::B => {
+                                    bus.debug_write(pa, &data).unwrap();
+                                },
+                                BusWidth::H => {
+                                    let data2:Vec<u16> = data.chunks_exact(2).into_iter().map(|x|u16::from_ne_bytes([x[1], x[0]])).collect();
+                                    for (cnt, h) in data2.iter().enumerate() {
+                                        bus.write16(pa + (cnt as u32 *2), *h).unwrap();
+                                    }
+                                },
+                                BusWidth::W => {
+                                    let data4:Vec<u32> = data.chunks_exact(4).into_iter().map(|x|u32::from_ne_bytes([x[3], x[2], x[1], x[0]])).collect();
+                                    for (cnt, h) in data4.iter().enumerate() {
+                                        bus.write32(pa + (cnt as u32 *2), *h).unwrap();
+                                    }
+                                },
+                            }
+                        }
+                        tx.send(DebugCommands::Ack).unwrap();
+                    },
+                    DebugCommands::Resume => {
+                        // update dbgstate
+                        debugger.state = DebugState::Run;
+                        tx.send(DebugCommands::Ack).unwrap();
+                    }
+                    DebugCommands::CtrlC => {
+                        debugger.state = DebugState::SingleStep;
+                        tx.send(DebugCommands::Ack).unwrap();
+                    }
+                    DebugCommands::Kms => {
+                        return true;
+                    }
+                    DebugCommands::ListBreakpoints(_) => {
+                        tx.send(DebugCommands::ListBreakpoints(debugger.bkpts.clone())).unwrap();
+                    }
+                    DebugCommands::AddBkpt(addr) => {
+                        debugger.bkpts.insert(addr);
+                        tx.send(DebugCommands::Ack).unwrap();
+                    },
+                    DebugCommands::RemoveBkpt(addr) => {
+                        debugger.bkpts.remove(&addr);
+                        tx.send(DebugCommands::Ack).unwrap();
+                    },
+                    DebugCommands::Diassemble((addr, arm_mode)) => {
+                        let paddr = self.cpu.translate(TLBReq { vaddr: VirtAddr(addr), kind: Access::Debug }).unwrap();
+                        let bus = self.cpu.bus.read();
+                        let dissassemble_res = if arm_mode {
+                            let opcd = bus.read32(paddr).unwrap();
+                            drop(bus);
+                            crate::bits::disassembly::disassmble_arm(opcd, addr)
+                        } else {
+                            let opcd = bus.read16(paddr).unwrap();
+                            drop(bus);
+                            crate::bits::disassembly::disassmble_thumb(opcd, addr)
+                        };
+                        let response = match dissassemble_res {
+                            Ok(s) => { s.into_bytes().into_boxed_slice() },
+                            Err(err) => {
+                                let mut s = format!("Error {} disassembling {addr}\n", if arm_mode {"ARM" } else { "Thumb" });
+                                s += &err.to_string();
+                                s.into_bytes().into_boxed_slice()
+                            },
+                        };
+                        tx.send(DebugCommands::Data(response)).unwrap();
+                    }
+                    DebugCommands::Data(_) |
+                    DebugCommands::Fail |
+                    DebugCommands::Ack => todo!(),
+                },
+                Err(_) => {},
+            }
+            match debugger.state {
+                DebugState::Run => break false,
+                DebugState::Pause => continue,
+                DebugState::HitBkpt |
+                DebugState::DoneStepPause => { unreachable!() },
+                DebugState::SingleStep => {
+                    break false;
+                },
+            }
+        }
+    }
 }
 
 impl Backend for InterpBackend {
@@ -396,11 +578,6 @@ impl Backend for InterpBackend {
             match load_custom_kernel_debuginfo(&kernel_elf) {
                 Ok(debuginfo) => {self.bus.write().install_debuginfo(debuginfo)},
                 Err(err) => {error!(target: "Custom Kernel", "Failed to load debuginfo for kernel: {err}")},
-            }
-
-            match load_custom_kernel_debug_frame(&kernel_elf) {
-                Ok(debug_frames) => {self.bus.write().install_debug_frames(debug_frames)},
-                Err(err) => {error!(target: "Custom Kernel", "Failed to load debug frames for kernel: {err}")},
             }
 
             let headers = kernel_elf.phdrs;
@@ -434,10 +611,15 @@ impl Backend for InterpBackend {
             }
 
             // Before each CPU step, check if we need to patch any close code
-            // I'm ok swallowing the possible Err result here because the only way this can error is
-            // failing to translate the address the PC is at. This is obviously very rare, and in
-            // the case it does happen we will know very soon anyway.
             self.hotpatch_check().unwrap_or_default();
+
+            // check if the debugger has anything for us.
+            if let Some(debugger) = &mut self.debugger {
+                if debugger.bkpts.contains(&self.cpu.read_fetch_pc()) {
+                    debugger.state = DebugState::HitBkpt;
+                }
+                self.remote_dbg();
+            }
 
             let res = self.cpu_step();
             match res {
@@ -478,6 +660,9 @@ impl Backend for InterpBackend {
                         info!(target: "Other", "FIXME: svc_read got error {reason}");
                     });
                 }
+            }
+            if let Some(debugger) = &mut self.debugger && let DebugState::SingleStep = debugger.state {
+                debugger.state = DebugState::DoneStepPause;
             }
             self.cpu_cycle += 1;
         }
@@ -523,16 +708,4 @@ fn load_custom_kernel_debuginfo(kernel_elf: &elf::File) -> anyhow::Result<Dwarf<
         }
     };
     Ok(Dwarf::load(loader)?)
-}
-
-fn load_custom_kernel_debug_frame(kernel_elf:&elf::File) -> anyhow::Result<gimli::read::DebugFrame<EndianArcSlice<BigEndian>>> {
-    match kernel_elf.get_section(".debug_frame") {
-        Some(debug_frame_section) => {
-            let d = debug_frame_section.data.as_slice();
-            let mut debug_frame = DebugFrame::from(EndianArcSlice::new(Arc::from(d), BigEndian));
-            debug_frame.set_address_size(std::mem::size_of::<u32>() as u8);
-            Ok(debug_frame)
-        },
-        None => anyhow::bail!("No debug frame section found"),
-    }
 }

@@ -2,6 +2,7 @@
 members = [
 	"core",
 	"back",
+	"remote",
 	"tui",
 	"vendor/rust-elf",
 ]

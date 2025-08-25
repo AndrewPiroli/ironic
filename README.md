@@ -23,7 +23,7 @@ implementation since the beginning:
 - [ ] Emulated USB support?
 - [ ] Emulated WLAN functionality?
 - [ ] Write a bunch of tests
-- [ ] Guest debugging functionality (perhaps via GDB, or some UI?)
+- [ ] [WIP] Guest debugging functionality
 - [ ] Go fast (performance optimizations, i.e. a JIT backend, etc)
 - [ ] Tools for fuzzing guest code
 - [ ] Other related tools?
