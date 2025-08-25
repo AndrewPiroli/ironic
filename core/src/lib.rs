@@ -1,4 +1,5 @@
 #![deny(unsafe_op_in_unsafe_fn)]
+#![feature(mpmc_channel)]
 
 /// Emulated CPU state and common operations.
 pub mod cpu;
