@@ -158,7 +158,7 @@ impl BigEndianMemory {
         let temp = std::mem::take(&mut self.writes); // Or else the subsequent calls to write_buf will double-count these writes.
         for range in patchfile.ranges {
             debug!(target: "MEMSAVE", "Patching memory at offset {}: #{} bytes", range.offset, &range.data.len());
-            self.write_buf(range.offset, &range.data)?;
+            self.write_buf(range.offset, &range.data, false)?;
         }
         self.writes = temp;
         Ok(())
@@ -217,14 +217,32 @@ impl BigEndianMemory {
 
 /// Bulk reads and writes.
 impl BigEndianMemory {
-    pub fn read_buf(&self, off: usize, dst: &mut [u8]) -> anyhow::Result<()> {
-        if off + dst.len() > self.data.len() {
-            bail!("OOB bulk read on BigEndianMemory, offset {off:x}");
+    pub fn read_buf(&self, off: usize, dst: &mut [u8], allow_partial: bool) -> anyhow::Result<usize> {
+        if allow_partial {
+            if off > self.data.len() {
+                return Ok(0);
+            }
+            let len = core::cmp::min(dst.len(),self.data.len() - off);
+            unsafe { core::ptr::copy_nonoverlapping(self.data.as_ptr().add(off), dst.as_mut_ptr(), len); }
+            return Ok(len);
         }
-        dst.copy_from_slice(&self.data[off..off + dst.len()]);
-        Ok(())
+        else if off + dst.len() > self.data.len() {
+            bail!("OOB bulk read on BigEndianMemory, offset {off:x}");
+        } else {
+            dst.copy_from_slice(&self.data[off..off + dst.len()]);
+            return Ok(dst.len());
+        }
     }
-    pub fn write_buf(&mut self, off: usize, src: &[u8]) -> anyhow::Result<()> {
+    pub fn write_buf(&mut self, off: usize, src: &[u8], allow_partial: bool) -> anyhow::Result<usize> {
+        if allow_partial {
+            if off > self.data.len() {
+                return Ok(0);
+            }
+            let len = core::cmp::min(src.len(), self.data.len() - off);
+            if self.writes.is_some() { self.handle_write_tracking(off, &src[..len]); }
+            unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), self.data.as_mut_ptr().add(off), len); }
+            return Ok(len);
+        }
         if off + src.len() > self.data.len() {
             bail!("OOB bulk write on BigEndianMemory, offset {off:x}");
         }
@@ -232,7 +250,7 @@ impl BigEndianMemory {
             self.handle_write_tracking(off, src);
         }
         self.data[off..off + src.len()].copy_from_slice(src);
-        Ok(())
+        Ok(src.len())
     }
     pub fn memset(&mut self, off: usize, len: usize, val: u8) -> anyhow::Result<()> {
         if off + len > self.data.len() {
