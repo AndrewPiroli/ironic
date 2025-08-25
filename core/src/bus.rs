@@ -21,21 +21,18 @@ use crate::dev::ohci::*;
 use crate::dev::sdhc::*;
 
 use gimli::BigEndian;
-use gimli::DebugFrame;
 use gimli::Dwarf;
 use gimli::EndianArcSlice;
 
 #[derive(Default)]
 pub struct DebugInfo {
     pub debuginfo: OnceLock<Dwarf<EndianArcSlice<BigEndian>>>,
-    pub debug_frames: OnceLock<DebugFrame<EndianArcSlice<BigEndian>>>,
     pub last_pc: AtomicU32,
     pub last_lr: AtomicU32,
 }
 
 pub static DEBUGINFO: DebugInfo = DebugInfo {
     debuginfo: OnceLock::new(),
-    debug_frames: OnceLock::new(),
     last_pc: AtomicU32::new(0),
     last_lr: AtomicU32::new(0),
 };
@@ -102,12 +99,6 @@ impl Bus {
     pub fn install_debuginfo(&mut self, debuginfo: Dwarf<EndianArcSlice<BigEndian>>) {
         if !DEBUGINFO.debuginfo.set(debuginfo).is_ok() {
             error!(target: "Other", "Debug info already installed");
-        }
-    }
-
-    pub fn install_debug_frames(&mut self, debug_frames: DebugFrame<EndianArcSlice<BigEndian>>) {
-        if !DEBUGINFO.debug_frames.set(debug_frames).is_ok() {
-            error!(target: "Other", "Debug frames already installed");
         }
     }
 

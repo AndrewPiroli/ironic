@@ -1,3 +1,4 @@
+#![feature(mpmc_channel)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![feature(thread_local)]
 

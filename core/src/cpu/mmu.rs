@@ -49,6 +49,51 @@ impl Cpu {
     }
 }
 
+/// Debugger accesses on virtual memory.
+///
+/// These ignore MMU and bus permissions and re-translate at every page boundary
+impl Cpu {
+    // Page size chunked iterator
+    fn debug_chunks(&self, vaddr: u32, len: usize, mut f: impl FnMut(u32, u32, usize) -> anyhow::Result<()>) -> anyhow::Result<()> {
+        let mut va = vaddr;
+        let mut remaining = len;
+        while remaining > 0 {
+            let to_page_end = (0x1000 - (va & (0xfff))) as usize;
+            let n = to_page_end.min(remaining);
+            let pa = self.translate(TLBReq::new(va, Access::Debug))
+                .with_context(|| format!("debug access: translation failed for vaddr {va:08x}"))?;
+            f(va, pa, n)?;
+            remaining -= n;
+            va = match va.checked_add(n as u32) {
+                Some(next) => next,
+                None if remaining == 0 => break,
+                None => bail!("debug access: address wrapped past {va:08x}"),
+            };
+        }
+        Ok(())
+    }
+
+    pub fn debug_read(&self, vaddr: u32, buf: &mut [u8]) -> anyhow::Result<()> {
+        let mut off = 0usize;
+        self.debug_chunks(vaddr, buf.len(), |va, pa, n| {
+            self.bus.read().dma_read(Requester::Debugger, pa, &mut buf[off..off + n])
+                .with_context(|| format!("debug read: {n:#x} bytes at vaddr {va:08x} (paddr {pa:08x})"))?;
+            off += n;
+            Ok(())
+        })
+    }
+
+    pub fn debug_write(&self, vaddr: u32, buf: &[u8]) -> anyhow::Result<()> {
+        let mut off = 0usize;
+        self.debug_chunks(vaddr, buf.len(), |va, pa, n| {
+            self.bus.write().dma_write(Requester::Debugger, pa, &buf[off..off + n])
+                .with_context(|| format!("debug write: {n:#x} bytes at vaddr {va:08x} (paddr {pa:08x})"))?;
+            off += n;
+            Ok(())
+        })
+    }
+}
+
 /// These are the functions used to perform virtual-to-physical translation.
 impl Cpu {
     /// Resolve a section descriptor, returning a physical address.
@@ -102,8 +147,7 @@ impl Cpu {
 
         let res = L1Descriptor::from_u32(val);
         if let L1Descriptor::Fault(_) = res {
-            bail!(format!("pc={:08x} L1 Fault descriptor unimpl, vaddr={:08x}",
-                self.read_fetch_pc(), vaddr.0));
+            bail!("L1 Fault descriptor unimpl, vaddr={vaddr:08x}");
         }
         Ok(res)
     }
