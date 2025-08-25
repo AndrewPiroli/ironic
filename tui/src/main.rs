@@ -10,6 +10,7 @@ use ironic_backend::interp::*;
 use ironic_backend::back::*;
 use ironic_backend::ppc::*;
 use ironic_backend::ppclle::PpcEmu;
+use ironic_core::dbg::DebugProxy;
 use log::info;
 use log::{debug, error};
 use parking_lot::RwLock;
@@ -63,6 +64,9 @@ struct Args {
     /// Define log levels for the program
     #[clap(long, default_value="info")]
     logging: String,
+    /// Enable ARM debugger (emulator waits for connection on startup)
+    #[clap(short, long)]
+    dbg_on: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -190,12 +194,21 @@ fn main() -> anyhow::Result<()> {
         // TODO: cleanup nicely?
         std::process::exit(0);
     }).unwrap();
+    let backend_proxy: Option<DebugProxy>;
+    if args.dbg_on {
+        let dbg_proxy = DebugProxy::new();
+        backend_proxy = Some(dbg_proxy.clone());
+        let dbg_svr = ironic_remote::ServerOptions::new(([127,0,0,1].into(), 9999), dbg_proxy);
+        let _dbg_thread = Builder::new().name("Remote Control Server".to_owned()).spawn(move || {dbg_svr.start();}).unwrap();
+    } else {
+        backend_proxy = None;
+    }
 
     // Fork off the backend thread
     let emu_bus = bus.clone();
     let ppc_early_on = custom_kernel.is_some() && enable_ppc_hle;
     let emu_thread = Builder::new().name("EmuThread".to_owned()).spawn(move || {
-        let mut back = InterpBackend::new(emu_bus, custom_kernel, ppc_early_on);
+        let mut back = InterpBackend::new(emu_bus, custom_kernel, ppc_early_on, backend_proxy);
         if let Err(reason) = back.run() {
             println!("InterpBackend returned an Err: {reason}");
         };
