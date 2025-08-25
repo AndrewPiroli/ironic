@@ -1,0 +1,166 @@
+use gdbstub::conn::ConnectionExt;
+use gdbstub::stub::SingleThreadStopReason;
+use gdbstub::target::Target;
+use gdbstub::arch::Arch;
+use gdbstub::target::ext::base::singlethread::*;
+use gdbstub_arch::arm::{ArmBreakpointKind, reg::ArmCoreRegs, reg::id::ArmCoreRegId};
+use parking_lot::RwLock;
+
+use std::net::TcpStream;
+use std::ptr::copy_nonoverlapping;
+use std::sync::{mpmc::*, Arc};
+
+pub enum DebugCommands {
+    /// Read Registers
+    ReadRegs([u32; 17]),
+    /// Write Registers
+    WriteRegs([u32;17]),
+    /// Step n times
+    Step(u32),
+    /// Read at a VirtualAddress
+    Peek(u32, usize),
+    /// Write to a VirtualAddress
+    Poke(u32, Box<[u8]>),
+    /// Move Data
+    Data(Box<[u8]>),
+    /// Acknowledgement
+    Ack,
+    /// Debugger Disconnected
+    Kms,
+}
+
+pub struct DebugProxy {
+    pub emu_tx: Sender<DebugCommands>,
+    pub emu_rx: Receiver<DebugCommands>,
+    dbg_tx: Sender<DebugCommands>,
+    dbg_rx: Receiver<DebugCommands>,
+}
+
+impl DebugProxy {
+    pub fn new() -> Self {
+        let (tx, rx) = channel();
+        let (tx2, rx2) = channel();
+        Self { 
+            emu_tx: tx,
+            emu_rx: rx2,
+            dbg_tx: tx2,
+            dbg_rx: rx
+        }
+    }
+}
+impl Clone for DebugProxy {
+    fn clone(&self) -> Self {
+        Self {
+            emu_tx: self.emu_tx.clone(),
+            emu_rx: self.emu_rx.clone(),
+            dbg_tx: self.dbg_tx.clone(),
+            dbg_rx: self.dbg_rx.clone()
+        }
+    }
+}
+
+pub struct Armv5TE;
+impl Arch for Armv5TE {
+    type Usize = u32;
+    type Registers = ArmCoreRegs;
+    type BreakpointKind = ArmBreakpointKind;
+    type RegId = ArmCoreRegId;
+}
+
+impl Target for DebugProxy {
+    type Arch = Armv5TE;
+    type Error = ();
+    fn base_ops(&mut self) -> gdbstub::target::ext::base::BaseOps<'_, Self::Arch, Self::Error> {
+        gdbstub::target::ext::base::BaseOps::SingleThread(self)
+    }
+}
+impl SingleThreadBase for DebugProxy {
+    fn read_registers(
+        &mut self,
+        regs: &mut <Self::Arch as Arch>::Registers,
+    ) -> gdbstub::target::TargetResult<(), Self> {
+        self.dbg_tx.send(DebugCommands::ReadRegs([0;17])).unwrap();
+        let cpuregs = self.dbg_rx.recv().unwrap();
+        if let DebugCommands::ReadRegs(cpuregs) = cpuregs {
+            unsafe { copy_nonoverlapping(cpuregs.as_ptr(), regs.r.as_mut_ptr(), 13); }
+            regs.sp = cpuregs[13];
+            regs.lr = cpuregs[14];
+            regs.pc = cpuregs[15];
+            regs.cpsr = cpuregs[16];
+        }
+        else { panic!() }
+        Ok(())
+    }
+
+    fn write_registers(&mut self, regs: &<Self::Arch as Arch>::Registers) -> gdbstub::target::TargetResult<(), Self> {
+        let mut cpuregs = [0;17];
+        unsafe { copy_nonoverlapping(regs.r.as_ptr(), cpuregs.as_mut_ptr(), 13); }
+        cpuregs[13] = regs.sp;
+        cpuregs[14] = regs.lr;
+        cpuregs[15] = regs.pc;
+        cpuregs[16] = regs.cpsr;
+        self.dbg_tx.send(DebugCommands::WriteRegs(cpuregs)).unwrap();
+        if let DebugCommands::Ack = self.dbg_rx.recv().unwrap() {}
+        else { panic!() }
+        Ok(())
+    }
+
+    fn read_addrs(
+        &mut self,
+        start_addr: <Self::Arch as Arch>::Usize,
+        data: &mut [u8],
+    ) -> gdbstub::target::TargetResult<usize, Self> {
+        self.dbg_tx.send(DebugCommands::Peek(start_addr, data.len())).unwrap();
+        if let DebugCommands::Data(readres) = self.dbg_rx.recv().unwrap() {
+            let len = core::cmp::min(data.len(), readres.len());
+            unsafe { copy_nonoverlapping(readres.as_ptr(), data.as_mut_ptr(), len); }
+            return Ok(len)
+        }
+        panic!()
+    }
+
+    fn write_addrs(
+        &mut self,
+        start_addr: <Self::Arch as Arch>::Usize,
+        data: &[u8],
+    ) -> gdbstub::target::TargetResult<(), Self> {
+        self.dbg_tx.send(DebugCommands::Poke(start_addr, Box::from(data))).unwrap();
+        if let DebugCommands::Ack = self.dbg_rx.recv().unwrap() {
+            Ok(())
+        }
+        else { panic!() }
+    }
+}
+
+enum GdbEventLoop {}
+
+impl gdbstub::stub::run_blocking::BlockingEventLoop for GdbEventLoop {
+    type Target = DebugProxy;
+
+    type Connection = Box<dyn ConnectionExt<Error = std::io::Error>>;
+
+    type StopReason = SingleThreadStopReason<u32>;
+
+    fn wait_for_stop_reason(
+        target: &mut Self::Target,
+        conn: &mut Self::Connection,
+    ) -> Result<
+        gdbstub::stub::run_blocking::Event<Self::StopReason>,
+        gdbstub::stub::run_blocking::WaitForStopReasonError<
+            <Self::Target as Target>::Error,
+            <Self::Connection as gdbstub::conn::Connection>::Error,
+        >,
+    > {
+        todo!()
+    }
+
+    fn on_interrupt(
+        target: &mut Self::Target,
+    ) -> Result<Option<Self::StopReason>, <Self::Target as Target>::Error> {
+        todo!()
+    }
+}
+
+pub fn gdb_thread(proxy: DebugProxy, mut stream: TcpStream) {
+
+}

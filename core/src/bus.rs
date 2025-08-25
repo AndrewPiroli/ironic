@@ -17,14 +17,12 @@ use crate::dev::ohci::*;
 use crate::dev::sdhc::*;
 
 use gimli::BigEndian;
-use gimli::DebugFrame;
 use gimli::Dwarf;
 use gimli::EndianArcSlice;
 
 #[derive(Default)]
 pub struct DebugInfo {
     pub debuginfo: Option<Dwarf<EndianArcSlice<BigEndian>>>,
-    pub debug_frames: Option<DebugFrame<EndianArcSlice<BigEndian>>>,
     pub last_pc: Option<u32>,
     pub last_lr: Option<u32>,
     pub last_sp: Option<u32>,
@@ -91,10 +89,6 @@ impl Bus {
 
     pub fn install_debuginfo(&mut self, debuginfo: Dwarf<EndianArcSlice<BigEndian>>) {
         self.debuginfo.debuginfo = Some(debuginfo);
-    }
-
-    pub fn install_debug_frames(&mut self, debug_frames: DebugFrame<EndianArcSlice<BigEndian>>) {
-        self.debuginfo.debug_frames = Some(debug_frames);
     }
 
     pub fn update_debug_location(&mut self, pc: Option<u32>, lr: Option<u32>, sp: Option<u32>) {
