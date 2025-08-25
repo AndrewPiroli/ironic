@@ -13,6 +13,7 @@ gimli = "~0.34.0"
 ironic-core = { path = "../core" }
 parking_lot = { version = "~0.13.0", default-features = false, features = ["nightly"] }
 log = { version = "~0.4.29", default-features = false, features = ["std"] }
+fxhash = "0.2.1"
 
 [target.'cfg(windows)'.dependencies]
 uds_windows = "~1.2.1"

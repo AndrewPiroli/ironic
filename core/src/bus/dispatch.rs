@@ -101,7 +101,6 @@ impl Bus {
     pub fn dma_read(&self, requester: Requester, addr: u32, buf: &mut [u8]) -> anyhow::Result<()> {
         self.do_dma_read(requester, addr, buf)
     }
-
 }
 
 impl Bus {
@@ -202,8 +201,9 @@ impl Bus {
         Ok(())
     }
 
-    fn do_mem_dma_read(&self, _access: AccessContext, dev: MemDevice, off: usize, buf: &mut [u8]) -> anyhow::Result<()> {
+    fn do_mem_dma_read(&self, access: AccessContext, dev: MemDevice, off: usize, buf: &mut [u8]) -> anyhow::Result<()> {
         match dev {
+            MemDevice::MaskRom if access.requester == Requester::Debugger => self.mrom.read_buf(off, buf)?,
             MemDevice::MaskRom => bail!("Bus error: DMA read on mask ROM"),
             MemDevice::Sram0 => self.sram0.read_buf(off, buf)?,
             MemDevice::Sram1 => self.sram1.read_buf(off, buf)?,
