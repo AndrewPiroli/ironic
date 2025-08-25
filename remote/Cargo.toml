@@ -1,0 +1,17 @@
+[package]
+name = "ironic-remote"
+version = "0.1.0"
+authors = ["Andrew Piroli <drewpiroli@gmail.com>"]
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = { version = "1.0.70", features = ["std", "backtrace"] }
+ironic-core = { path = "../core" }
+ironic-backend = { path = "../back" }
+log = { version = "0.4.17", default-features = false, features = ["std"] }
+tokio = { version = "~1.48.0", default-features = false, features = ["macros", "net", "rt-multi-thread", "signal"] }
+axum = { version = "~0.8.6", default-features = false, features = ["form", "http1", "json", "macros", "matched-path", "original-uri", "tokio", "multipart"] }
+serde = { version = "~1.0.228", default-features = false, features = ["derive"] }
+fxhash = "0.2.1"
