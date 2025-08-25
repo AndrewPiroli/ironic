@@ -13,6 +13,8 @@ gimli = "~0.27.2"
 ironic-core = { path = "../core" }
 parking_lot = { version = "~0.12.1", default-features = false, features = ["nightly", "hardware-lock-elision"] }
 log = { version = "0.4.17", default-features = false, features = ["std"] }
+gdbstub = { version = "~0.7.7", default-features = false, features = ["alloc", "std", "core_error"]}
+gdbstub_arch = { version = "~0.3.2", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1.0.2"

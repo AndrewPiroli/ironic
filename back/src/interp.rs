@@ -10,6 +10,7 @@ use gimli::{BigEndian, read::*};
 use log::{error, info};
 use parking_lot::RwLock;
 
+use std::net::TcpListener;
 use std::sync::Arc;
 use std::fs;
 use std::time::Duration;
@@ -17,6 +18,8 @@ use std::time::Duration;
 extern crate elf;
 
 use crate::back::*;
+use crate::gdb_support;
+use crate::gdb_support::DebugProxy;
 use crate::interp::lut::*;
 use crate::interp::dispatch::DispatchRes;
 
@@ -90,14 +93,15 @@ pub struct InterpBackend {
     /// Current stage in the platform boot process.
     pub boot_status: BootStatus,
     pub custom_kernel: Option<String>,
-    debugger_attached: bool,
+    debugger: Option<DebugProxy>,
 }
 impl InterpBackend {
-    pub fn new(bus: Arc<RwLock<Bus>>, custom_kernel: Option<String>, ppc_early_on: bool) -> Self {
+    pub fn new(bus: Arc<RwLock<Bus>>, custom_kernel: Option<String>, ppc_early_on: bool, enable_gdb: bool) -> Self {
         if ppc_early_on {
             PPC_EARLY_ON.store(true, std::sync::atomic::Ordering::Release);
         }
-        InterpBackend {
+
+        let ret = InterpBackend {
             svc_buf: String::new(),
             cpu: Cpu::new(bus.clone()),
             boot_status: BootStatus::Boot0,
@@ -105,8 +109,16 @@ impl InterpBackend {
             bus_cycle: 0,
             bus,
             custom_kernel,
-            debugger_attached: false,
+            debugger: None,
+        };
+        if enable_gdb {
+            let l = TcpListener::bind("127.0.0.1:9999").expect("FIXME tcpfail");
+            println!("Waiting for GDB connection at 127.0.0.1:9999");
+            let (stream, _) = l.accept().expect("FIXME tcp accept fail");
+            let our_proxy = DebugProxy::new();
+            std::thread::Builder::new().name("GDB Stub".into()).spawn(move ||gdb_support::gdb_thread(our_proxy.clone(), stream)).unwrap();
         }
+        ret
     }
 }
 
@@ -320,7 +332,7 @@ impl InterpBackend {
         // Depending on the instruction, adjust the program counter
         let cpu_res = match disp_res {
             DispatchRes::Breakpoint => {
-                self.debugger_attached = true;
+                // self.debugger_attached = true;
                 self.cpu.increment_pc();
                 CpuRes::StepOk
             }
@@ -368,6 +380,56 @@ impl InterpBackend {
         self.update_boot_status();
         cpu_res
     }
+    fn gdb(&mut self) {
+        use gdb_support::DebugCommands;
+        use ironic_core::cpu::mmu::prim::*;
+        use ironic_core::cpu::reg::Reg;
+        use ironic_core::cpu::psr::Psr;
+        use core::ptr::copy_nonoverlapping;
+        let x = self.debugger.as_ref().unwrap();
+        let (tx, rx) = (&x.emu_tx, &x.emu_rx);
+        match rx.recv_timeout(Duration::from_nanos(0)) {
+            Ok(dc) => match dc {
+                DebugCommands::ReadRegs(_) => {
+                    let mut reply = [0u32;17];
+                    unsafe {
+                        copy_nonoverlapping(self.cpu.reg.r.as_ptr(), reply.as_mut_ptr(), 13);
+                    }
+                    reply[13] = self.cpu.reg[Reg::Sp];
+                    reply[14] = self.cpu.reg[Reg::Lr];
+                    reply[15] = self.cpu.reg.pc;
+                    reply[16] = self.cpu.reg.cpsr.0;
+                    tx.send(DebugCommands::ReadRegs(reply)).unwrap();
+                },
+                DebugCommands::WriteRegs(new_regs) => {
+                    unsafe {
+                        copy_nonoverlapping(new_regs.as_ptr(), self.cpu.reg.r.as_mut_ptr(), 13);
+                    }
+                    self.cpu.reg[Reg::Sp] = new_regs[13];
+                    self.cpu.reg[Reg::Lr] = new_regs[14];
+                    self.cpu.write_exec_pc(new_regs[15]);
+                    self.cpu.reg.cpsr = Psr(new_regs[16]);
+                    tx.send(DebugCommands::Ack).unwrap();
+                },
+                DebugCommands::Step(_) => todo!(),
+                DebugCommands::Peek(peek_va, peek_size) => {
+                    let pa = self.cpu.translate(TLBReq { vaddr: VirtAddr(peek_va), kind: Access::Debug }).unwrap();
+                    let mut data = Vec::with_capacity(peek_size);
+                    self.bus.write().dma_read(pa, &mut data).unwrap();
+                    tx.send(DebugCommands::Data(data.into_boxed_slice())).unwrap();
+                },
+                DebugCommands::Poke(poke_va, poke_data) => {
+                    let pa = self.cpu.translate(TLBReq { vaddr: VirtAddr(poke_va), kind: Access::Debug }).unwrap();
+                    self.bus.write().dma_write(pa, &poke_data).unwrap();
+                    tx.send(DebugCommands::Ack).unwrap();
+                },
+                DebugCommands::Kms |
+                DebugCommands::Data(_) |
+                DebugCommands::Ack => todo!(),
+            },
+            Err(_) => {},
+        }
+    }
 }
 
 impl Backend for InterpBackend {
@@ -396,11 +458,6 @@ impl Backend for InterpBackend {
             match load_custom_kernel_debuginfo(&kernel_elf) {
                 Ok(debuginfo) => {self.bus.write().install_debuginfo(debuginfo)},
                 Err(err) => {error!(target: "Custom Kernel", "Failed to load debuginfo for kernel: {err}")},
-            }
-
-            match load_custom_kernel_debug_frame(&kernel_elf) {
-                Ok(debug_frames) => {self.bus.write().install_debug_frames(debug_frames)},
-                Err(err) => {error!(target: "Custom Kernel", "Failed to load debug frames for kernel: {err}")},
             }
 
             let headers = kernel_elf.phdrs;
@@ -434,10 +491,12 @@ impl Backend for InterpBackend {
             }
 
             // Before each CPU step, check if we need to patch any close code
-            // I'm ok swallowing the possible Err result here because the only way this can error is
-            // failing to translate the address the PC is at. This is obviously very rare, and in
-            // the case it does happen we will know very soon anyway.
             self.hotpatch_check().unwrap_or_default();
+
+                        // check if gdb has anything for us.
+            if self.debugger.is_some() {
+                self.gdb();
+            }
 
             let res = self.cpu_step();
             match res {
@@ -523,16 +582,4 @@ fn load_custom_kernel_debuginfo(kernel_elf: &elf::File) -> anyhow::Result<Dwarf<
         }
     };
     Ok(Dwarf::load(loader)?)
-}
-
-fn load_custom_kernel_debug_frame(kernel_elf:&elf::File) -> anyhow::Result<gimli::read::DebugFrame<EndianArcSlice<BigEndian>>> {
-    match kernel_elf.get_section(".debug_frame") {
-        Some(debug_frame_section) => {
-            let d = debug_frame_section.data.as_slice();
-            let mut debug_frame = DebugFrame::from(EndianArcSlice::new(Arc::from(d), BigEndian));
-            debug_frame.set_address_size(std::mem::size_of::<u32>() as u8);
-            Ok(debug_frame)
-        },
-        None => anyhow::bail!("No debug frame section found"),
-    }
 }
