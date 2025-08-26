@@ -1,16 +1,22 @@
 use gdbstub::conn::ConnectionExt;
-use gdbstub::stub::SingleThreadStopReason;
+use gdbstub::stub::run_blocking::BlockingEventLoop;
+use gdbstub::stub::{run_blocking, GdbStub, SingleThreadStopReason};
+use gdbstub::target::ext::breakpoints::{Breakpoints, HwBreakpoint, SwBreakpoint};
 use gdbstub::target::Target;
 use gdbstub::arch::Arch;
 use gdbstub::target::ext::base::singlethread::*;
 use gdbstub_arch::arm::{ArmBreakpointKind, reg::ArmCoreRegs, reg::id::ArmCoreRegId};
-use parking_lot::RwLock;
 
 use std::net::TcpStream;
 use std::ptr::copy_nonoverlapping;
-use std::sync::{mpmc::*, Arc};
+use std::sync::mpmc::*;
 
+use log::error;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DebugCommands {
+    /// Emulator Requested Stop
+    EmuStop(SingleThreadStopReason<u32>),
     /// Read Registers
     ReadRegs([u32; 17]),
     /// Write Registers
@@ -23,10 +29,18 @@ pub enum DebugCommands {
     Poke(u32, Box<[u8]>),
     /// Move Data
     Data(Box<[u8]>),
+    /// User pressed Ctrl-C in gdb
+    CtrlC,
     /// Acknowledgement
     Ack,
     /// Debugger Disconnected
     Kms,
+    /// Resume execution
+    Resume,
+    /// Add breakpoint
+    AddBkpt(u32),
+    /// Remove breakpoint
+    RemoveBkpt(u32),
 }
 
 pub struct DebugProxy {
@@ -72,6 +86,9 @@ impl Target for DebugProxy {
     type Error = ();
     fn base_ops(&mut self) -> gdbstub::target::ext::base::BaseOps<'_, Self::Arch, Self::Error> {
         gdbstub::target::ext::base::BaseOps::SingleThread(self)
+    }
+    fn guard_rail_implicit_sw_breakpoints(&self) -> bool {
+        true
     }
 }
 impl SingleThreadBase for DebugProxy {
@@ -130,6 +147,94 @@ impl SingleThreadBase for DebugProxy {
         }
         else { panic!() }
     }
+
+    #[inline(always)]
+    fn support_resume(&mut self) -> Option<SingleThreadResumeOps<'_, Self>> {
+        Some(self)
+    }
+}
+
+impl SingleThreadResume for DebugProxy {
+    fn resume(&mut self, signal: Option<gdbstub::common::Signal>) -> Result<(), Self::Error> {
+        let _ = signal;
+        self.dbg_tx.send(DebugCommands::Resume).unwrap();
+        if let DebugCommands::Ack = self.dbg_rx.recv().unwrap() {
+            Ok(())
+        }
+        else { panic!() }
+    }
+    fn support_single_step(&mut self) -> Option<SingleThreadSingleStepOps<'_, Self>> {
+        Some(self)
+    }
+}
+
+impl SingleThreadSingleStep for DebugProxy {
+    fn step(&mut self, signal: Option<gdbstub::common::Signal>) -> Result<(), Self::Error> {
+        let _ = signal;
+        self.dbg_tx.send(DebugCommands::Step(1)).unwrap();
+        if let DebugCommands::Ack = self.dbg_rx.recv().unwrap() {
+            Ok(())
+        }
+        else { panic!() }
+    }
+}
+
+impl Breakpoints for DebugProxy {
+    fn support_sw_breakpoint(&mut self) -> Option<gdbstub::target::ext::breakpoints::SwBreakpointOps<'_, Self>> {
+        Some(self)
+    }
+    fn support_hw_breakpoint(&mut self) -> Option<gdbstub::target::ext::breakpoints::HwBreakpointOps<'_, Self>> {
+        Some(self)
+    }
+}
+
+impl SwBreakpoint for DebugProxy {
+    fn add_sw_breakpoint(
+        &mut self,
+        addr: <Self::Arch as Arch>::Usize,
+        kind: <Self::Arch as Arch>::BreakpointKind,
+    ) -> gdbstub::target::TargetResult<bool, Self> {
+        let _ = kind;
+        self.dbg_tx.send(DebugCommands::AddBkpt(addr)).unwrap();
+        if let DebugCommands::Ack = self.dbg_rx.recv().unwrap() {
+            Ok(true)
+        }
+        else {
+            Ok(false)
+        }
+    }
+
+    fn remove_sw_breakpoint(
+        &mut self,
+        addr: <Self::Arch as Arch>::Usize,
+        kind: <Self::Arch as Arch>::BreakpointKind,
+    ) -> gdbstub::target::TargetResult<bool, Self> {
+        let _ = kind;
+        self.dbg_tx.send(DebugCommands::RemoveBkpt(addr)).unwrap();
+        if let DebugCommands::Ack = self.dbg_rx.recv().unwrap() {
+            Ok(true)
+        }
+        else {
+            Ok(false)
+        }
+    }
+}
+impl HwBreakpoint for DebugProxy {
+    fn add_hw_breakpoint(
+        &mut self,
+        addr: <Self::Arch as Arch>::Usize,
+        kind: <Self::Arch as Arch>::BreakpointKind,
+    ) -> gdbstub::target::TargetResult<bool, Self> {
+        self.add_sw_breakpoint(addr, kind)
+    }
+
+    fn remove_hw_breakpoint(
+        &mut self,
+        addr: <Self::Arch as Arch>::Usize,
+        kind: <Self::Arch as Arch>::BreakpointKind,
+    ) -> gdbstub::target::TargetResult<bool, Self> {
+        self.remove_sw_breakpoint(addr, kind)
+    }
 }
 
 enum GdbEventLoop {}
@@ -151,16 +256,65 @@ impl gdbstub::stub::run_blocking::BlockingEventLoop for GdbEventLoop {
             <Self::Connection as gdbstub::conn::Connection>::Error,
         >,
     > {
-        todo!()
+        use std::time::Duration;
+        loop {
+            // ck for message
+            if target.dbg_rx.len() != 0 {
+                match target.dbg_rx.try_iter().peekable().peek() {
+                    Some(DebugCommands::EmuStop(reason)) => {
+                        return Ok(run_blocking::Event::TargetStopped(*reason));
+                    }
+                    _ => {},
+                }
+            }
+            match conn.peek() {
+                Ok(Some(byte)) => {
+                    // don't forget to read out this data
+                    let _ = conn.read().unwrap();
+                    return Ok(run_blocking::Event::IncomingData(byte));
+                },
+                Ok(None) => {}
+                Err(e) => { return Err(run_blocking::WaitForStopReasonError::Connection(e)); },
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 
     fn on_interrupt(
         target: &mut Self::Target,
     ) -> Result<Option<Self::StopReason>, <Self::Target as Target>::Error> {
-        todo!()
+        target.dbg_tx.send(DebugCommands::CtrlC).unwrap();
+        Ok(None)
     }
 }
 
-pub fn gdb_thread(proxy: DebugProxy, mut stream: TcpStream) {
-
+pub fn gdb_thread(mut proxy: DebugProxy, stream: TcpStream) {
+    let boxed = Box::new(stream) as Box<dyn ConnectionExt<Error = std::io::Error>>;
+    let x = GdbStub::<'_, DebugProxy, <GdbEventLoop as BlockingEventLoop>::Connection>::new(boxed);
+    match x.run_blocking::<GdbEventLoop>(&mut proxy) {
+        Ok(dc) => {
+            match dc {
+                gdbstub::stub::DisconnectReason::Disconnect => {
+                    proxy.dbg_tx.send(DebugCommands::Kms).unwrap();
+                    return;
+                },
+                gdbstub::stub::DisconnectReason::Kill |
+                gdbstub::stub::DisconnectReason::TargetExited(_) |
+                gdbstub::stub::DisconnectReason::TargetTerminated(_) => todo!(),
+            }
+        },
+        Err(y) => {
+            if y.is_target_error() {
+                return;
+            }
+            else if y.is_connection_error() {
+                proxy.dbg_tx.send(DebugCommands::Kms).unwrap();
+                return
+            }
+            else {
+                error!("GDBSTUB err: {y:?}");
+                return;
+            }
+        },
+    }
 }

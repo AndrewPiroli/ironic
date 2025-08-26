@@ -63,6 +63,17 @@ pub enum BootStatus {
     UserKernel, 
 }
 
+enum DebugState {
+    Run,
+    SingleStep,
+}
+
+struct Debugger {
+    state: DebugState,
+    proxy: DebugProxy,
+    bkpts: Vec<u32>,
+}
+
 /// Backend for interpreting-style emulation. 
 ///
 /// Right now, the main loop works like this:
@@ -93,7 +104,7 @@ pub struct InterpBackend {
     /// Current stage in the platform boot process.
     pub boot_status: BootStatus,
     pub custom_kernel: Option<String>,
-    debugger: Option<DebugProxy>,
+    debugger: Option<Debugger>,
 }
 impl InterpBackend {
     pub fn new(bus: Arc<RwLock<Bus>>, custom_kernel: Option<String>, ppc_early_on: bool, enable_gdb: bool) -> Self {
@@ -101,7 +112,7 @@ impl InterpBackend {
             PPC_EARLY_ON.store(true, std::sync::atomic::Ordering::Release);
         }
 
-        let ret = InterpBackend {
+        let mut ret = InterpBackend {
             svc_buf: String::new(),
             cpu: Cpu::new(bus.clone()),
             boot_status: BootStatus::Boot0,
@@ -116,7 +127,9 @@ impl InterpBackend {
             println!("Waiting for GDB connection at 127.0.0.1:9999");
             let (stream, _) = l.accept().expect("FIXME tcp accept fail");
             let our_proxy = DebugProxy::new();
-            std::thread::Builder::new().name("GDB Stub".into()).spawn(move ||gdb_support::gdb_thread(our_proxy.clone(), stream)).unwrap();
+            let gdb_proxy = our_proxy.clone();
+            ret.debugger = Some(Debugger { state: DebugState::SingleStep, proxy: our_proxy, bkpts: Vec::with_capacity(0) });
+            std::thread::Builder::new().name("GDB Stub".into()).spawn(move ||gdb_support::gdb_thread(gdb_proxy, stream)).unwrap();
         }
         ret
     }
@@ -380,14 +393,17 @@ impl InterpBackend {
         self.update_boot_status();
         cpu_res
     }
-    fn gdb(&mut self) {
+
+    fn gdb(&mut self) -> bool {
         use gdb_support::DebugCommands;
         use ironic_core::cpu::mmu::prim::*;
         use ironic_core::cpu::reg::Reg;
         use ironic_core::cpu::psr::Psr;
         use core::ptr::copy_nonoverlapping;
-        let x = self.debugger.as_ref().unwrap();
+        let debugger = self.debugger.as_mut().unwrap();
+        let x = &debugger.proxy;
         let (tx, rx) = (&x.emu_tx, &x.emu_rx);
+        while !matches!(debugger.state, DebugState::Run) {
         match rx.recv_timeout(Duration::from_nanos(0)) {
             Ok(dc) => match dc {
                 DebugCommands::ReadRegs(_) => {
@@ -423,12 +439,34 @@ impl InterpBackend {
                     self.bus.write().dma_write(pa, &poke_data).unwrap();
                     tx.send(DebugCommands::Ack).unwrap();
                 },
-                DebugCommands::Kms |
+                DebugCommands::Resume => {
+                    // update dbgstate
+                    debugger.state = DebugState::Run;
+                    tx.send(DebugCommands::Ack).unwrap();
+                }
+                DebugCommands::CtrlC => {
+                    debugger.state = DebugState::SingleStep;
+                    // No ack
+                }
+                DebugCommands::Kms => {
+                    return true;
+                }
+                DebugCommands::AddBkpt(addr) => {
+                    debugger.bkpts.push(addr);
+                    tx.send(DebugCommands::Ack).unwrap();
+                },
+                DebugCommands::RemoveBkpt(addr) => {
+                    debugger.bkpts.retain(|v|*v != addr);
+                    tx.send(DebugCommands::Ack).unwrap();
+                }
+                DebugCommands::EmuStop(_) |
                 DebugCommands::Data(_) |
                 DebugCommands::Ack => todo!(),
             },
             Err(_) => {},
         }
+        }
+        return false;
     }
 }
 
@@ -493,7 +531,7 @@ impl Backend for InterpBackend {
             // Before each CPU step, check if we need to patch any close code
             self.hotpatch_check().unwrap_or_default();
 
-                        // check if gdb has anything for us.
+            // check if gdb has anything for us.
             if self.debugger.is_some() {
                 self.gdb();
             }
