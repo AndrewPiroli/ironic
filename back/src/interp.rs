@@ -6,6 +6,7 @@ pub mod dispatch;
 pub mod lut;
 
 use anyhow::anyhow;
+use gdbstub::stub::SingleThreadStopReason;
 use gimli::{BigEndian, read::*};
 use log::{error, info};
 use parking_lot::RwLock;
@@ -65,7 +66,9 @@ pub enum BootStatus {
 
 enum DebugState {
     Run,
+    Pause,
     SingleStep,
+    DoneStepPause,
 }
 
 struct Debugger {
@@ -403,70 +406,85 @@ impl InterpBackend {
         let debugger = self.debugger.as_mut().unwrap();
         let x = &debugger.proxy;
         let (tx, rx) = (&x.emu_tx, &x.emu_rx);
-        while !matches!(debugger.state, DebugState::Run) {
-        match rx.recv_timeout(Duration::from_nanos(0)) {
-            Ok(dc) => match dc {
-                DebugCommands::ReadRegs(_) => {
-                    let mut reply = [0u32;17];
-                    unsafe {
-                        copy_nonoverlapping(self.cpu.reg.r.as_ptr(), reply.as_mut_ptr(), 13);
+        loop {
+            if let DebugState::DoneStepPause = debugger.state {
+                debugger.state = DebugState::Pause;
+                debugger.proxy.sr_tx.send(SingleThreadStopReason::DoneStep).unwrap();
+            }
+            match rx.recv_timeout(Duration::from_nanos(1)) {
+                Ok(dc) => match dc {
+                    DebugCommands::ReadRegs(_) => {
+                        let mut reply = [0u32;17];
+                        unsafe {
+                            copy_nonoverlapping(self.cpu.reg.r.as_ptr(), reply.as_mut_ptr(), 13);
+                        }
+                        reply[13] = self.cpu.reg[Reg::Sp];
+                        reply[14] = self.cpu.reg[Reg::Lr];
+                        reply[15] = self.cpu.read_fetch_pc();
+                        reply[16] = self.cpu.reg.cpsr.0;
+                        tx.send(DebugCommands::ReadRegs(reply)).unwrap();
+                    },
+                    DebugCommands::WriteRegs(new_regs) => {
+                        unsafe {
+                            copy_nonoverlapping(new_regs.as_ptr(), self.cpu.reg.r.as_mut_ptr(), 13);
+                        }
+                        self.cpu.reg[Reg::Sp] = new_regs[13];
+                        self.cpu.reg[Reg::Lr] = new_regs[14];
+                        self.cpu.write_exec_pc(new_regs[15]);
+                        self.cpu.reg.cpsr = Psr(new_regs[16]);
+                        tx.send(DebugCommands::Ack).unwrap();
+                    },
+                    DebugCommands::Step(n) => {
+                        if n > 1 { unimplemented!() }
+                        debugger.state = DebugState::SingleStep;
+                        tx.send(DebugCommands::Ack).unwrap();
+                    },
+                    DebugCommands::Peek(peek_va, peek_size) => {
+                        let pa = self.cpu.translate(TLBReq { vaddr: VirtAddr(peek_va), kind: Access::Debug }).unwrap();
+                        let mut data = Vec::with_capacity(peek_size);
+                        self.bus.write().dma_read(pa, &mut data).unwrap();
+                        tx.send(DebugCommands::Data(data.into_boxed_slice())).unwrap();
+                    },
+                    DebugCommands::Poke(poke_va, poke_data) => {
+                        let pa = self.cpu.translate(TLBReq { vaddr: VirtAddr(poke_va), kind: Access::Debug }).unwrap();
+                        self.bus.write().dma_write(pa, &poke_data).unwrap();
+                        tx.send(DebugCommands::Ack).unwrap();
+                    },
+                    DebugCommands::Resume => {
+                        // update dbgstate
+                        debugger.state = DebugState::Run;
+                        tx.send(DebugCommands::Ack).unwrap();
                     }
-                    reply[13] = self.cpu.reg[Reg::Sp];
-                    reply[14] = self.cpu.reg[Reg::Lr];
-                    reply[15] = self.cpu.reg.pc;
-                    reply[16] = self.cpu.reg.cpsr.0;
-                    tx.send(DebugCommands::ReadRegs(reply)).unwrap();
-                },
-                DebugCommands::WriteRegs(new_regs) => {
-                    unsafe {
-                        copy_nonoverlapping(new_regs.as_ptr(), self.cpu.reg.r.as_mut_ptr(), 13);
+                    DebugCommands::CtrlC => {
+                        debugger.state = DebugState::SingleStep;
+                        // No ack
                     }
-                    self.cpu.reg[Reg::Sp] = new_regs[13];
-                    self.cpu.reg[Reg::Lr] = new_regs[14];
-                    self.cpu.write_exec_pc(new_regs[15]);
-                    self.cpu.reg.cpsr = Psr(new_regs[16]);
-                    tx.send(DebugCommands::Ack).unwrap();
+                    DebugCommands::Kms => {
+                        return true;
+                    }
+                    DebugCommands::AddBkpt(addr) => {
+                        debugger.bkpts.push(addr);
+                        tx.send(DebugCommands::Ack).unwrap();
+                    },
+                    DebugCommands::RemoveBkpt(addr) => {
+                        debugger.bkpts.retain(|v|*v != addr);
+                        tx.send(DebugCommands::Ack).unwrap();
+                    }
+                    DebugCommands::EmuStop(_) |
+                    DebugCommands::Data(_) |
+                    DebugCommands::Ack => todo!(),
                 },
-                DebugCommands::Step(_) => todo!(),
-                DebugCommands::Peek(peek_va, peek_size) => {
-                    let pa = self.cpu.translate(TLBReq { vaddr: VirtAddr(peek_va), kind: Access::Debug }).unwrap();
-                    let mut data = Vec::with_capacity(peek_size);
-                    self.bus.write().dma_read(pa, &mut data).unwrap();
-                    tx.send(DebugCommands::Data(data.into_boxed_slice())).unwrap();
+                Err(_) => {},
+            }
+            match debugger.state {
+                DebugState::Run => break false,
+                DebugState::Pause => continue,
+                DebugState::DoneStepPause => { unreachable!() },
+                DebugState::SingleStep => {
+                    break false;
                 },
-                DebugCommands::Poke(poke_va, poke_data) => {
-                    let pa = self.cpu.translate(TLBReq { vaddr: VirtAddr(poke_va), kind: Access::Debug }).unwrap();
-                    self.bus.write().dma_write(pa, &poke_data).unwrap();
-                    tx.send(DebugCommands::Ack).unwrap();
-                },
-                DebugCommands::Resume => {
-                    // update dbgstate
-                    debugger.state = DebugState::Run;
-                    tx.send(DebugCommands::Ack).unwrap();
-                }
-                DebugCommands::CtrlC => {
-                    debugger.state = DebugState::SingleStep;
-                    // No ack
-                }
-                DebugCommands::Kms => {
-                    return true;
-                }
-                DebugCommands::AddBkpt(addr) => {
-                    debugger.bkpts.push(addr);
-                    tx.send(DebugCommands::Ack).unwrap();
-                },
-                DebugCommands::RemoveBkpt(addr) => {
-                    debugger.bkpts.retain(|v|*v != addr);
-                    tx.send(DebugCommands::Ack).unwrap();
-                }
-                DebugCommands::EmuStop(_) |
-                DebugCommands::Data(_) |
-                DebugCommands::Ack => todo!(),
-            },
-            Err(_) => {},
+            }
         }
-        }
-        return false;
     }
 }
 
@@ -575,6 +593,9 @@ impl Backend for InterpBackend {
                         info!(target: "Other", "FIXME: svc_read got error {reason}");
                     });
                 }
+            }
+            if let Some(debugger) = &mut self.debugger && let DebugState::SingleStep = debugger.state {
+                debugger.state = DebugState::DoneStepPause;
             }
             self.cpu_cycle += 1;
         }

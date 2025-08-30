@@ -46,6 +46,8 @@ pub enum DebugCommands {
 pub struct DebugProxy {
     pub emu_tx: Sender<DebugCommands>,
     pub emu_rx: Receiver<DebugCommands>,
+    pub sr_tx: Sender<SingleThreadStopReason<u32>>,
+    sr_rx: Receiver<SingleThreadStopReason<u32>>,
     dbg_tx: Sender<DebugCommands>,
     dbg_rx: Receiver<DebugCommands>,
 }
@@ -54,9 +56,12 @@ impl DebugProxy {
     pub fn new() -> Self {
         let (tx, rx) = channel();
         let (tx2, rx2) = channel();
+        let (sr_tx, sr_rx) = channel();
         Self { 
             emu_tx: tx,
             emu_rx: rx2,
+            sr_tx,
+            sr_rx,
             dbg_tx: tx2,
             dbg_rx: rx
         }
@@ -67,6 +72,8 @@ impl Clone for DebugProxy {
         Self {
             emu_tx: self.emu_tx.clone(),
             emu_rx: self.emu_rx.clone(),
+            sr_tx: self.sr_tx.clone(),
+            sr_rx: self.sr_rx.clone(),
             dbg_tx: self.dbg_tx.clone(),
             dbg_rx: self.dbg_rx.clone()
         }
@@ -105,7 +112,7 @@ impl SingleThreadBase for DebugProxy {
             regs.pc = cpuregs[15];
             regs.cpsr = cpuregs[16];
         }
-        else { panic!() }
+        else { dbg!(cpuregs); panic!() }
         Ok(())
     }
 
@@ -181,7 +188,7 @@ impl SingleThreadSingleStep for DebugProxy {
 
 impl Breakpoints for DebugProxy {
     fn support_sw_breakpoint(&mut self) -> Option<gdbstub::target::ext::breakpoints::SwBreakpointOps<'_, Self>> {
-        Some(self)
+        None
     }
     fn support_hw_breakpoint(&mut self) -> Option<gdbstub::target::ext::breakpoints::HwBreakpointOps<'_, Self>> {
         Some(self)
@@ -259,10 +266,10 @@ impl gdbstub::stub::run_blocking::BlockingEventLoop for GdbEventLoop {
         use std::time::Duration;
         loop {
             // ck for message
-            if target.dbg_rx.len() != 0 {
-                match target.dbg_rx.try_iter().peekable().peek() {
-                    Some(DebugCommands::EmuStop(reason)) => {
-                        return Ok(run_blocking::Event::TargetStopped(*reason));
+            if target.sr_rx.len() != 0 {
+                match target.sr_rx.recv_timeout(Duration::from_nanos(0)) {
+                    Ok(sr) => {
+                        return Ok(run_blocking::Event::TargetStopped(sr));
                     }
                     _ => {},
                 }

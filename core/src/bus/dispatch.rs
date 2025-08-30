@@ -167,7 +167,7 @@ impl Bus {
         let off = (addr & handle.mask) as usize;
         match handle.dev {
             Device::Mem(dev) => { match dev {
-                MaskRom => { bail!("Bus error: DMA read on mask ROM".to_string()); },
+                MaskRom => self.mrom.read_buf(off, buf)?,//{ bail!("Bus error: DMA read on mask ROM".to_string()); },
                 Sram0   => self.sram0.read_buf(off, buf)?,
                 Sram1   => self.sram1.read_buf(off, buf)?,
                 Mem1    => self.mem1.read_buf(off, buf)?,
