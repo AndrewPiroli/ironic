@@ -15,8 +15,6 @@ use log::error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DebugCommands {
-    /// Emulator Requested Stop
-    EmuStop(SingleThreadStopReason<u32>),
     /// Read Registers
     ReadRegs([u32; 17]),
     /// Write Registers
@@ -33,6 +31,8 @@ pub enum DebugCommands {
     CtrlC,
     /// Acknowledgement
     Ack,
+    /// Failure
+    Fail,
     /// Debugger Disconnected
     Kms,
     /// Resume execution
@@ -134,13 +134,19 @@ impl SingleThreadBase for DebugProxy {
         start_addr: <Self::Arch as Arch>::Usize,
         data: &mut [u8],
     ) -> gdbstub::target::TargetResult<usize, Self> {
+        use gdbstub::target::TargetError;
         self.dbg_tx.send(DebugCommands::Peek(start_addr, data.len())).unwrap();
-        if let DebugCommands::Data(readres) = self.dbg_rx.recv().unwrap() {
-            let len = core::cmp::min(data.len(), readres.len());
-            unsafe { copy_nonoverlapping(readres.as_ptr(), data.as_mut_ptr(), len); }
-            return Ok(len)
+        match self.dbg_rx.recv().unwrap() {
+            DebugCommands::Data(readres) => {
+                let len = core::cmp::min(data.len(), readres.len());
+                unsafe { copy_nonoverlapping(readres.as_ptr(), data.as_mut_ptr(), len); }
+                return Ok(len)
+            },
+            DebugCommands::Fail => {
+                return Err(TargetError::NonFatal);
+            },
+            _ => {return Err(TargetError::NonFatal)}
         }
-        panic!()
     }
 
     fn write_addrs(
@@ -149,10 +155,14 @@ impl SingleThreadBase for DebugProxy {
         data: &[u8],
     ) -> gdbstub::target::TargetResult<(), Self> {
         self.dbg_tx.send(DebugCommands::Poke(start_addr, Box::from(data))).unwrap();
-        if let DebugCommands::Ack = self.dbg_rx.recv().unwrap() {
-            Ok(())
+        use gdbstub::target::TargetError;
+        match self.dbg_rx.recv().unwrap() {
+            DebugCommands::Ack => { Ok(()) },
+            DebugCommands::Fail => {
+                Err(TargetError::NonFatal)
+            }
+            _ => Err(TargetError::NonFatal)
         }
-        else { panic!() }
     }
 
     #[inline(always)]

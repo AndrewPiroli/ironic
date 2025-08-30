@@ -441,14 +441,27 @@ impl InterpBackend {
                     },
                     DebugCommands::Peek(peek_va, peek_size) => {
                         let pa = self.cpu.translate(TLBReq { vaddr: VirtAddr(peek_va), kind: Access::Debug }).unwrap();
-                        let mut data = Vec::with_capacity(peek_size);
-                        self.bus.write().dma_read(pa, &mut data).unwrap();
-                        tx.send(DebugCommands::Data(data.into_boxed_slice())).unwrap();
+                        let mut data = vec!(0u8; peek_size);
+                        match self.bus.write().debug_read(pa, &mut data) {
+                            Ok(cnt) => {
+                                data.truncate(cnt);
+                                tx.send(DebugCommands::Data(data.into_boxed_slice())).unwrap();
+                            },
+                            Err(err) => {
+                                error!(target: "GDB", "Failed to service GDB Read: {err}");
+                                tx.send(DebugCommands::Fail).unwrap();
+                            },
+                        }
                     },
                     DebugCommands::Poke(poke_va, poke_data) => {
                         let pa = self.cpu.translate(TLBReq { vaddr: VirtAddr(poke_va), kind: Access::Debug }).unwrap();
-                        self.bus.write().dma_write(pa, &poke_data).unwrap();
-                        tx.send(DebugCommands::Ack).unwrap();
+                        let cnt = self.bus.write().debug_write(pa, &poke_data).unwrap();
+                        if cnt != poke_data.len() {
+                            tx.send(DebugCommands::Fail).unwrap();
+                        }
+                        else {
+                            tx.send(DebugCommands::Ack).unwrap();
+                        }
                     },
                     DebugCommands::Resume => {
                         // update dbgstate
@@ -470,8 +483,8 @@ impl InterpBackend {
                         debugger.bkpts.retain(|v|*v != addr);
                         tx.send(DebugCommands::Ack).unwrap();
                     }
-                    DebugCommands::EmuStop(_) |
                     DebugCommands::Data(_) |
+                    DebugCommands::Fail |
                     DebugCommands::Ack => todo!(),
                 },
                 Err(_) => {},
