@@ -12,10 +12,22 @@ class MemHandle(object):
         self.size = size
     def read(self, off=0, size=None):
         return self.__sock.send_guestread(self.paddr, self.size)
+    def read8(self, off=0):
+        return self.__sock.send_ppc_read8(self.paddr + off)
+    def read16(self, off=0):
+        return self.__sock.send_ppc_read16(self.paddr + off)
+    def read32(self, off=0):
+        return self.__sock.send_ppc_read32(self.paddr + off)
     def write(self, buf, off=0):
         assert len(buf) <= self.size
         self.__sock.send_guestwrite(self.paddr, buf)
         self.data_size = len(buf)
+    def write8(self, data, off=0):
+        return self.__sock.send_ppc_write8(self.paddr + off, data)
+    def write16(self, data, off=0):
+        return self.__sock.send_ppc_write16(self.paddr + off, data)
+    def write32(self, data, off=0):
+        return self.__sock.send_ppc_write32(self.paddr + off, data)
 
 
 class PPCMemory(object):
