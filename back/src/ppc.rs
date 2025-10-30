@@ -33,18 +33,30 @@ pub enum Command {
     Ack, 
     MessageNoReturn,
     Shutdown,
-    Unimpl,
+    PPCRead8,
+    PPCRead16,
+    PPCRead32,
+    PPCWrite8,
+    PPCWrite16,
+    PPCWrite32,
+    Unimpl
 }
 impl Command {
     fn from_u32(x: u32) -> Self {
         match x {
-            1 => Self::HostRead,
-            2 => Self::HostWrite,
-            3 => Self::Message,
-            4 => Self::Ack,
-            5 => Self::MessageNoReturn,
+            1  => Self::HostRead,
+            2  => Self::HostWrite,
+            3  => Self::Message,
+            4  => Self::Ack,
+            5  => Self::MessageNoReturn,
+            6  => Self::PPCRead8,
+            7  => Self::PPCRead16,
+            8  => Self::PPCRead32,
+            9  => Self::PPCWrite8,
+            10 => Self::PPCWrite16,
+            11 => Self::PPCWrite32,
             255 => Self::Shutdown,
-            _ => Self::Unimpl,
+            _  => Self::Unimpl,
         }
     }
 }
@@ -131,14 +143,18 @@ impl PpcBackend {
             self.socket_errors = 0;
 
             loop {
-                info!(target:"PPC", "waiting for command");
-
                 let res = self.wait_for_request(&mut client);
                 if let Some(req) = res {
                     match req.cmd {
                         Command::Ack => self.handle_ack(req)?,
                         Command::HostRead => self.handle_read(&mut client, req)?,
+                        Command::PPCRead8 => self.handle_read8(&mut client, req)?,
+                        Command::PPCRead16 => self.handle_read16(&mut client, req)?,
+                        Command::PPCRead32 => self.handle_read32(&mut client, req)?,
                         Command::HostWrite => self.handle_write(&mut client, req)?,
+                        Command::PPCWrite8 => self.handle_write8(&mut client, req)?,
+                        Command::PPCWrite16 => self.handle_write16(&mut client, req)?,
+                        Command::PPCWrite32 => self.handle_write32(&mut client, req)?,
                         Command::Message => {
                             self.handle_message(&mut client, req)?;
                             let armmsg = self.wait_for_resp();
@@ -261,11 +277,69 @@ impl PpcBackend {
         Ok(())
     }
 
+
+    /// Read from physical memory.
+    pub fn handle_read8(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
+        // vvv   these logs produce massive spam for PPC LLE, so they're commented out for now
+        //info!(target: "PPC", "read8 at {:08x}", req.addr);
+        self.obuf[0] = self.bus.read().read8(req.addr)?;
+        let _ = client.write(&self.obuf[0..1])?; // maybe FIXME: is it ok to ignore the # of bytes written here?
+        Ok(())
+    }
+
+    /// Read from physical memory.
+    pub fn handle_read16(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
+        //info!(target: "PPC", "read16 at {:08x}", req.addr);
+        let tmpval = self.bus.read().read16(req.addr)?;
+        self.obuf[0] = ((tmpval & 0xff00) >> 8) as u8;
+        self.obuf[1] = (tmpval & 0x00ff) as u8;
+        let _ = client.write(&self.obuf[0..2])?; // maybe FIXME: is it ok to ignore the # of bytes written here?
+        Ok(())
+    }
+
+    /// Read from physical memory.
+    pub fn handle_read32(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
+        let tmpval = self.bus.read().read32(req.addr)?;
+        //info!(target: "PPC", "read32 at {:08x}, val={:08x}", req.addr, tmpval);
+        self.obuf[0] = ((tmpval & 0xff000000) >> 24) as u8;
+        self.obuf[1] = ((tmpval & 0x00ff0000) >> 16) as u8;
+        self.obuf[2] = ((tmpval & 0x0000ff00) >> 8) as u8;
+        self.obuf[3] = (tmpval & 0x000000ff) as u8;
+        let _ = client.write(&self.obuf[0..4])?; // maybe FIXME: is it ok to ignore the # of bytes written here?
+        Ok(())
+    }
+
     /// Write to physical memory.
     pub fn handle_write(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
         info!(target: "PPC", "write {:x} bytes at {:08x}", req.len, req.addr);
         let data = &self.ibuf[0xc..(0xc + req.len as usize)];
         self.bus.write().dma_write(req.addr, data)?;
+        let _ = client.write("OK".as_bytes())?; // maybe FIXME: is it ok to ignore the # of bytes written here?
+        Ok(())
+    }
+
+    /// Write to physical memory.
+    pub fn handle_write8(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
+        //info!(target: "PPC", "write8 at {:08x} with {:08x}", req.addr, req.len);
+        let _ = self.bus.write().write8(req.addr, self.ibuf[0xc])?;
+        let _ = client.write("OK".as_bytes())?; // maybe FIXME: is it ok to ignore the # of bytes written here?
+        Ok(())
+    }
+
+    /// Write to physical memory.
+    pub fn handle_write16(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
+        //info!(target: "PPC", "write16 at {:08x} with {:08x}", req.addr, req.len);
+        let val = u16::from_le_bytes(self.ibuf[0xc..0xe].try_into().unwrap());
+        let _ = self.bus.write().write16(req.addr, val)?;
+        let _ = client.write("OK".as_bytes())?; // maybe FIXME: is it ok to ignore the # of bytes written here?
+        Ok(())
+    }
+
+    /// Write to physical memory.
+    pub fn handle_write32(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
+        //info!(target: "PPC", "write32 at {:08x} with {:08x}", req.addr, req.len);
+        let val = u32::from_le_bytes(self.ibuf[0xc..0x10].try_into().unwrap());
+        let _ = self.bus.write().write32(req.addr, val)?;
         let _ = client.write("OK".as_bytes())?; // maybe FIXME: is it ok to ignore the # of bytes written here?
         Ok(())
     }
