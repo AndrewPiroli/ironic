@@ -32,6 +32,12 @@ pub enum Command {
     Message, 
     Ack, 
     MessageNoReturn,
+    PPCRead8,
+    PPCRead16,
+    PPCRead32,
+    PPCWrite8,
+    PPCWrite16,
+    PPCWrite32,
     PatchRange,
     DisableProtections,
     Shutdown,
@@ -45,6 +51,12 @@ impl Command {
             3 => Self::Message,
             4 => Self::Ack,
             5 => Self::MessageNoReturn,
+            6 => Self::PPCRead8,
+            7 => Self::PPCRead16,
+            8 => Self::PPCRead32,
+            9 => Self::PPCWrite8,
+            10 => Self::PPCWrite16,
+            11 => Self::PPCWrite32,
             14 => Self::PatchRange,
             15 => Self::DisableProtections,
             255 => Self::Shutdown,
@@ -195,6 +207,12 @@ impl PpcBackend {
                     Command::MessageNoReturn => {
                         self.handle_message(&mut client, req)?;
                     },
+                    Command::PPCRead8 => self.handle_read8(&mut client, req)?,
+                    Command::PPCRead16 => self.handle_read16(&mut client, req)?,
+                    Command::PPCRead32 => self.handle_read32(&mut client, req)?,
+                    Command::PPCWrite8 => self.handle_write8(&mut client, req)?,
+                    Command::PPCWrite16 => self.handle_write16(&mut client, req)?,
+                    Command::PPCWrite32 => self.handle_write32(&mut client, req)?,
                     Command::PatchRange => {
                         self.handle_patch_range(&mut client, req)?;
                     },
@@ -301,11 +319,18 @@ impl PpcBackend {
             anyhow::bail!("Socket message exceeds BUF_LEN {BUF_LEN:x}");
         }
 
-        // Only HostWrite includes inline payload bytes after the 12-byte header.
-        // For other commands, `len` is command metadata (e.g. read length), not
-        // socket payload size.
-        if let Command::HostWrite = req.cmd && req.len > 0 {
-            let payload_end = 0xc + req.len as usize;
+        let payload_len = match req.cmd {
+            // HostWrite carries `len` bytes inline after the header.
+            Command::HostWrite => req.len as usize,
+            // Raw PPC writes also carry the value inline after the header.
+            Command::PPCWrite8 => 1,
+            Command::PPCWrite16 => 2,
+            Command::PPCWrite32 => 4,
+            _ => 0,
+        };
+
+        if payload_len > 0 {
+            let payload_end = 0xc + payload_len;
             if !Self::recv(client, &mut self.ibuf[0xc..payload_end])? {
                 anyhow::bail!("Socket closed while reading payload");
             }
@@ -323,12 +348,69 @@ impl PpcBackend {
         Ok(())
     }
 
+
+    /// Read from physical memory.
+    pub fn handle_read8(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
+        debug!(target: "PPC", "read8 at {:08x}", req.addr);
+        self.obuf[0] = self.bus.read().read8(req.addr)?;
+        client.write_all(&self.obuf[0..1])?;
+        Ok(())
+    }
+
+    /// Read from physical memory.
+    pub fn handle_read16(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
+        debug!(target: "PPC", "read16 at {:08x}", req.addr);
+        let tmpval = self.bus.read().read16(req.addr)?;
+        self.obuf[0] = ((tmpval & 0xff00) >> 8) as u8;
+        self.obuf[1] = (tmpval & 0x00ff) as u8;
+        client.write_all(&self.obuf[0..2])?;
+        Ok(())
+    }
+
+    /// Read from physical memory.
+    pub fn handle_read32(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
+        let tmpval = self.bus.read().read32(req.addr)?;
+        debug!(target: "PPC", "read32 at {:08x}, val={:08x}", req.addr, tmpval);
+        self.obuf[0] = ((tmpval & 0xff000000) >> 24) as u8;
+        self.obuf[1] = ((tmpval & 0x00ff0000) >> 16) as u8;
+        self.obuf[2] = ((tmpval & 0x0000ff00) >> 8) as u8;
+        self.obuf[3] = (tmpval & 0x000000ff) as u8;
+        client.write_all(&self.obuf[0..4])?;
+        Ok(())
+    }
+
     /// Write to physical memory.
     pub fn handle_write(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
         debug!(target: "PPC", "write {:x} bytes at {:08x}", req.len, req.addr);
         let data = &self.ibuf[0xc..(0xc + req.len as usize)];
         self.bus.write().dma_write(req.addr, data)?;
         client.write_all(b"OK")?;
+        Ok(())
+    }
+
+    /// Write to physical memory.
+    pub fn handle_write8(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
+        debug!(target: "PPC", "write8 at {:08x} with {:02x}", req.addr, self.ibuf[0xc]);
+        let _ = self.bus.write().write8(req.addr, self.ibuf[0xc])?;
+        client.write_all("OK".as_bytes())?;
+        Ok(())
+    }
+
+    /// Write to physical memory.
+    pub fn handle_write16(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
+        let val = u16::from_le_bytes(self.ibuf[0xc..0xe].try_into().unwrap());
+        debug!(target: "PPC", "write16 at {:08x} with {:04x}", req.addr, val);
+        let _ = self.bus.write().write16(req.addr, val)?;
+        client.write_all("OK".as_bytes())?;
+        Ok(())
+    }
+
+    /// Write to physical memory.
+    pub fn handle_write32(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
+        let val = u32::from_le_bytes(self.ibuf[0xc..0x10].try_into().unwrap());
+        debug!(target: "PPC", "write32 at {:08x} with {:08x}", req.addr, val);
+        let _ = self.bus.write().write32(req.addr, val)?;
+        client.write_all("OK".as_bytes())?;
         Ok(())
     }
 
