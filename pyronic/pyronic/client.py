@@ -5,7 +5,6 @@ from pyronic.ios import *
 from hexdump import hexdump
 from . import PatchRange, MemHandle
 
-
 class PPCMemory(object):
     """ The fabled "bump allocator," notoriously difficult to implement """
     def __init__(self, sock, head=0x01000000, tail=0x01780000):
