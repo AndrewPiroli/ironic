@@ -66,8 +66,8 @@ impl Bus {
             0x0d07 => Some(SDHC0_HANDLE),
             0x0d08 => Some(SDHC1_HANDLE),
 
-            0x0d00 | 0x0d80 |
-            0x0d8b => self.resolve_hlwd(addr),
+            0x0c00 | 0x0d00 |
+            0x0d80 | 0x0d8b => self.resolve_hlwd(addr),
 
             0x0000..=0x017f => Some(MEM1_HANDLE),
             0x1000..=0x13ff => Some(MEM2_HANDLE),
