@@ -196,6 +196,7 @@ pub struct Hollywood {
     pub di: compat::di::DriveInterface,
     pub mi: compat::mem::MemInterface,
     pub si: compat::si::SerialInterface,
+    pub ai: compat::ai::AudioInterface,
     pub ahb: AhbInterface,
     pub ddr: ddr::DdrInterface,
 
@@ -231,6 +232,7 @@ impl Hollywood {
             exi: compat::exi::EXInterface::new(),
             mi: compat::mem::MemInterface::new(),
             si: compat::si::SerialInterface::default(),
+            ai: compat::ai::AudioInterface::default(),
             ddr: ddr::DdrInterface::new(),
 
             usb_frc_rst: 0,

@@ -82,6 +82,7 @@ pub enum IoDevice {
     Di, 
     Si, 
     Exi, 
+    Ai,
     Mi,
 }
 
