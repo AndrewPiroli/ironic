@@ -1,4 +1,5 @@
 pub mod di;
 pub mod mem;
 pub mod exi;
+pub mod si;
 
