@@ -34,6 +34,7 @@ impl Bus {
             (BusWidth::W, Ahb)   => self.hlwd.ahb.read(off),
             (BusWidth::W, Di)    => self.hlwd.di.read(off),
             (BusWidth::W, Exi)   => self.hlwd.exi.read(off),
+            (BusWidth::W, Si)    => self.hlwd.si.read(off),
             (BusWidth::H, Mi)    => self.hlwd.mi.read(off),
             (BusWidth::H, Ddr)   => self.hlwd.ddr.read(off),
             _ => { bail!("Unsupported read {width:?} for {dev:?} at {off:x}"); },
@@ -56,6 +57,7 @@ impl Bus {
 
 
             (Word(val), Hlwd)  => self.hlwd.write(off, val),
+            (Word(val), Si)    => self.hlwd.si.write(off, val),
             (Word(val), Ahb)   => self.hlwd.ahb.write(off, val),
             (Word(val), Exi)   => self.hlwd.exi.write(off, val),
             (Word(val), Di)    => self.hlwd.di.write(off, val),
