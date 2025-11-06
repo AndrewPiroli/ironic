@@ -37,6 +37,7 @@ pub const MEM2_MASK:    u32 = 0x03ff_ffff;
 
 pub const VI_BASE:      u32 = 0x0c00_2000;
 pub const PI_BASE:      u32 = 0x0c00_3000;
+pub const MI_BASE:      u32 = 0x0c00_4000;
 pub const DSP_BASE:     u32 = 0x0c00_5000;
 
 pub const NAND_BASE:    u32 = 0x0d01_0000;
@@ -70,6 +71,7 @@ pub const MEM1_TAIL:    u32 = MEM1_BASE + MEM1_SIZE - 1;
 pub const MEM2_TAIL:    u32 = MEM2_BASE + MEM2_SIZE - 1;
 pub const VI_TAIL:      u32 = VI_BASE + HLWDEV_SIZE - 1;
 pub const PI_TAIL:      u32 = PI_BASE + HLWDEV_SIZE - 1;
+pub const MI_TAIL:      u32 = MI_BASE + HLWDEV_SIZE - 1;
 pub const DSP_TAIL:     u32 = DSP_BASE + HLWDEV_SIZE - 1;
 pub const NAND_TAIL:    u32 = NAND_BASE + COREDEV_SIZE - 1;
 pub const AES_TAIL:     u32 = AES_BASE + COREDEV_SIZE - 1;
