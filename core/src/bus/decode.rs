@@ -96,6 +96,7 @@ impl Bus {
             EXI_BASE..=EXI_TAIL     => Some(EXI_HANDLE),
             AI_BASE..=AI_TAIL       => Some(AI_HANDLE),
             AHB_BASE..=AHB_TAIL     => Some(AHB_HANDLE),
+            MI_BASE..=MI_TAIL |
             MEM_BASE..=MEM_TAIL     => Some(MI_HANDLE),
             DDR_BASE..=DDR_TAIL     => Some(DDR_HANDLE),
             _ => None,
