@@ -16,6 +16,23 @@ pub trait MmioDevice {
     fn write(&mut self, off: usize, val: Self::Width) -> anyhow::Result<Option<BusTask>>;
 }
 
+/// Interface used by the bus to perform some access on an I/O device that has multiple widths.
+pub trait MmioDeviceMultiWidth {
+    /// Handle a 32-bit read, returning some result.
+    fn read32(&self, off: usize) -> anyhow::Result<BusPacket>;
+    /// Handle a 16-bit read, returning some result.
+    fn read16(&self, off: usize) -> anyhow::Result<BusPacket>;
+    /// Handle a 8-bit read, returning some result.
+    fn read8(&self, off: usize) -> anyhow::Result<BusPacket>;
+
+    /// Handle a 32-bit write, optionally returning a task for the bus.
+    fn write32(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>>;
+    /// Handle a 16-bit write, optionally returning a task for the bus.
+    fn write16(&mut self, off: usize, val: u16) -> anyhow::Result<Option<BusTask>>;
+    /// Handle a 8-bit write, optionally returning a task for the bus.
+    fn write8(&mut self, off: usize, val: u8) -> anyhow::Result<Option<BusTask>>;
+}
+
 impl Bus {
     /// Dispatch a physical read access to some memory-mapped I/O device.
     pub fn do_mmio_read(&self, dev: IoDevice, off: usize, width: BusWidth) -> anyhow::Result<BusPacket> {
