@@ -8,7 +8,7 @@ use crate::bus::task::*;
 /// TODO: This is nowhere near accurrate, these registers all have real side effects.
 /// However, this is good enough to at least get software that uses them booting, until it can be
 /// properly implemented.
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct SerialInterface {
     pub outbuf: [u32; 4],
     pub inbuf_h: [u32; 4],
@@ -16,7 +16,27 @@ pub struct SerialInterface {
     pub poll: u32,
     pub comcsr: u32,
     pub sr: u32,
-    pub exilk: u32
+    pub exilk: u32,
+    pub iobuf: [u32; 0x80],
+}
+impl Default for SerialInterface {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl SerialInterface {
+    pub fn new() -> Self {
+        SerialInterface {
+            outbuf: [0; 4],
+            inbuf_h: [0; 4],
+            inbuf_l: [0; 4],
+            poll: 0,
+            comcsr: 0,
+            sr: 0,
+            exilk: 0,
+            iobuf: [0; 0x80],
+        }
+    }
 }
 impl MmioDevice for SerialInterface {
     type Width = u32;
@@ -29,6 +49,7 @@ impl MmioDevice for SerialInterface {
             0x34 => self.comcsr,
             0x38 => self.sr,
             0x3c => self.exilk,
+            0x80..0xfc => self.iobuf[(off - 0x80) / 4],
             _ => { bail!("SI read from undefined offset {off:x}"); },
         };
         Ok(BusPacket::Word(val))
@@ -42,6 +63,7 @@ impl MmioDevice for SerialInterface {
             0x34 => self.comcsr = val,
             0x38 => self.sr = val,
             0x3c => self.exilk = val,
+            0x80..0xfc => self.iobuf[(off - 0x80) / 4] = val,
             _ => { bail!("SI write {val:08x} to undefined offset {off:x}"); },
         }
         Ok(None)
