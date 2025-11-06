@@ -41,6 +41,7 @@ decl_io_handle!(AHB_HANDLE, Ahb,    0x0000_3fff);
 decl_io_handle!(MI_HANDLE, Mi,      0x0000_01ff);
 decl_io_handle!(DDR_HANDLE, Ddr,    0x0000_01ff);
 decl_io_handle!(VI_HANDLE, Vi,      0x0000_00ff);
+decl_io_handle!(PI_HANDLE, Pi,      0x0000_00ff);
 decl_io_handle!(DI_HANDLE, Di,      0x0000_03ff);
 decl_io_handle!(SI_HANDLE, Si,      0x0000_00ff);
 decl_io_handle!(EXI_HANDLE, Exi,    0x0000_03ff);
@@ -86,6 +87,7 @@ impl Bus {
         match addr {
             HLWD_BASE..=HLWD_TAIL   => Some(HLWD_HANDLE),
             VI_BASE..=VI_TAIL       => Some(VI_HANDLE),
+            PI_BASE..=PI_TAIL       => Some(PI_HANDLE),
             DI_BASE..=DI_TAIL       => Some(DI_HANDLE),
             SI_BASE..=SI_TAIL       => Some(SI_HANDLE),
             EXI_REG_BASE..=EXI_REG_TAIL |

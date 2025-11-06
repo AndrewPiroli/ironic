@@ -80,6 +80,7 @@ pub enum IoDevice {
     Ahb, 
     Ddr,
     Vi, 
+    Pi, 
     Di, 
     Si, 
     Exi, 
