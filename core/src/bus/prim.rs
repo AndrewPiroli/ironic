@@ -81,6 +81,7 @@ pub enum IoDevice {
     Ddr,
     Vi, 
     Pi, 
+    Dsp,
     Di, 
     Si, 
     Exi, 

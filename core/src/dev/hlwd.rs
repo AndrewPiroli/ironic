@@ -194,6 +194,7 @@ pub struct Hollywood {
 
     pub vi: compat::vi::VideoInterface,
     pub pi: compat::pi::ProcessorInterface,
+    pub dsp: compat::dsp::DigitalSignalProcessor,
     pub exi: compat::exi::EXInterface,
     pub di: compat::di::DriveInterface,
     pub mi: compat::mem::MemInterface,
@@ -232,6 +233,7 @@ impl Hollywood {
             ahb: AhbInterface::default(),
             vi: compat::vi::VideoInterface::default(),
             pi: compat::pi::ProcessorInterface::default(),
+            dsp: compat::dsp::DigitalSignalProcessor::default(),
             di: compat::di::DriveInterface::default(),
             exi: compat::exi::EXInterface::new(),
             mi: compat::mem::MemInterface::new(),

@@ -5,4 +5,5 @@ pub mod si;
 pub mod ai;
 pub mod vi;
 pub mod pi;
+pub mod dsp;
 
