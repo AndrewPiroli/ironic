@@ -192,6 +192,7 @@ pub struct Hollywood {
     pub gpio: gpio::GpioInterface,
     pub irq: irq::IrqInterface,
 
+    pub vi: compat::vi::VideoInterface,
     pub exi: compat::exi::EXInterface,
     pub di: compat::di::DriveInterface,
     pub mi: compat::mem::MemInterface,
@@ -228,6 +229,7 @@ impl Hollywood {
             pll: ClockInterface::default(),
 
             ahb: AhbInterface::default(),
+            vi: compat::vi::VideoInterface::default(),
             di: compat::di::DriveInterface::default(),
             exi: compat::exi::EXInterface::new(),
             mi: compat::mem::MemInterface::new(),

@@ -79,6 +79,7 @@ pub enum IoDevice {
     Hlwd, 
     Ahb, 
     Ddr,
+    Vi, 
     Di, 
     Si, 
     Exi, 
