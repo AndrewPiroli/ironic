@@ -40,6 +40,7 @@ pub const PI_BASE:      u32 = 0x0c00_3000;
 pub const MI_BASE:      u32 = 0x0c00_4000;
 pub const DSP_BASE:     u32 = 0x0c00_5000;
 
+pub const HLWD_REG_BASE:u32 = 0x0d00_0000;
 pub const SI_REG_BASE:  u32 = 0x0d00_6400;
 pub const EXI_REG_BASE: u32 = 0x0d00_6800;
 pub const AI_REG_BASE:  u32 = 0x0d00_6c00;
@@ -76,6 +77,7 @@ pub const VI_TAIL:      u32 = VI_BASE + HLWDEV_SIZE - 1;
 pub const PI_TAIL:      u32 = PI_BASE + HLWDEV_SIZE - 1;
 pub const MI_TAIL:      u32 = MI_BASE + HLWDEV_SIZE - 1;
 pub const DSP_TAIL:     u32 = DSP_BASE + HLWDEV_SIZE - 1;
+pub const HLWD_REG_TAIL:u32 = HLWD_REG_BASE + HLWDEV_SIZE - 1;
 pub const SI_REG_TAIL:  u32 = SI_REG_BASE + HLWDEV_SIZE - 1;
 //pub const EXI_REG_TAIL: u32 = EXI_REG_BASE + HLWDEV_SIZE - 1;
 pub const AI_REG_TAIL:  u32 = AI_REG_BASE + COREDEV_SIZE - 1;
