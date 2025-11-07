@@ -86,6 +86,7 @@ impl Bus {
     /// Resolve a physical address associated with the Hollywood MMIO region.
     fn resolve_hlwd(&self, addr: u32) -> Option<DeviceHandle> {
         match addr {
+            HLWD_REG_BASE..=HLWD_REG_TAIL |
             HLWD_BASE..=HLWD_TAIL   => Some(HLWD_HANDLE),
             VI_BASE..=VI_TAIL       => Some(VI_HANDLE),
             PI_BASE..=PI_TAIL       => Some(PI_HANDLE),
