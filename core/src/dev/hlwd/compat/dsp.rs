@@ -1,4 +1,5 @@
 use anyhow::bail;
+use log::info;
 
 use crate::bus::prim::*;
 use crate::bus::mmio::*;
@@ -100,12 +101,28 @@ impl MmioDeviceMultiWidth for DigitalSignalProcessor {
     }
     fn write16(&mut self, off: usize, val: u16) -> anyhow::Result<Option<BusTask>> {
         match off {
-            0x00 => self.mailbox_in_h = val,
+            0x00 => {
+                self.mailbox_in_h = val;
+                if val & 0x8000 == 0 {
+                    self.mailbox_out_h &= 0x7fff;
+                }
+            },
             0x02 => self.mailbox_in_l = val,
             0x04 => self.mailbox_out_h = val,
             0x06 => self.mailbox_out_l = val,
             0x08 => self.unk_08 = val,
-            0x0a => self.control_status = val & 0xfffe, // so that RES stays 0
+            0x0a => {
+                self.control_status = val & 0xfffe; // so that RES stays 0
+                if val & 0x0004 == 1 && self.control_status & 0x0004 == 0 {
+                    info!("DSP Halted");
+                }
+                else if val & 0x0004 == 0 && self.control_status & 0x0004 == 1 {
+                    info!("DSP Resumed");
+                    self.mailbox_out_h |= 0x8000;
+                }
+
+                self.mailbox_out_h |= 0x8000; // libogc waits for this
+            },
             0x0c => self.unk_0c = val,
             0x0e => self.unk_0e = val,
             0x10 => self.unk_10 = val,
