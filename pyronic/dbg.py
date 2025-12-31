@@ -82,7 +82,7 @@ class DebugREPL:
 		print("sent interrupt")
 
 	def help(self) -> None:
-		print("commands: connect <url>, regs, setreg <i> <val>, step [n], resume, interrupt, mem view <addr> <size> [B|H|W], bkpt list|add|rm <addr|reg>, quit")
+		print("commands: connect <url>, regs, setreg <i> <val>, step [n], resume, interrupt, mem view <addr> <size> [B|H|W], bkpt list|add|rm <addr|reg>, consoledbg [on, off, toggle], quit")
 
 	def do_mem_view(self, args: List[str]) -> None:
 		if not self.client:
@@ -279,6 +279,27 @@ class DebugREPL:
 		except Exception as e:
 			print(f"Failed: {e}")
 
+	def do_consoledbg(self, args: List[str]) -> None:
+		p = None
+		if len(args) == 0:
+			if self.client.get_consoledbg():
+				p = True
+			else:
+				p = False
+		elif args[0] in ("true", "on"):
+			self.client.set_consoledbg(True)
+			p = True
+		elif args[0] in ("false", "off"):
+			self.client.set_consoledbg(False)
+			p = False
+		elif args[0] in ("t", "toggle"):
+			p = not self.client.get_consoledbg()
+			self.client.set_consoledbg(p)
+		if p:
+			print("Console Debug Print: On")
+		else:
+			print("Console Debug Print: Off")
+
 	def repl(self) -> None:
 		try:
 			while True:
@@ -331,6 +352,8 @@ class DebugREPL:
 					print("Repeat mode: {}".format("On" if self.repeat else "Off"))
 				elif cmd in ("dis", "disassemble"):
 					self.do_disassemble(args)
+				elif cmd == "consoledbg":
+					self.do_consoledbg(args)
 				else:
 					print("unknown command")
 		except (EOFError, KeyboardInterrupt):

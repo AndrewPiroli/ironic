@@ -92,3 +92,12 @@ class RemoteDebugClient:
 		r = self.session.get(f"{self.base}/disassemble/{mode}/{addr:x}")
 		r.raise_for_status()
 		return r.text
+
+	def get_consoledbg(self) -> bool:
+		r = self.session.get(f"{self.base}/consoledbg")
+		r.raise_for_status()
+		return bool(r.json())
+
+	def set_consoledbg(self, toset: bool) -> None:
+		r = self.session.put(f"{self.base}/consoledbg", data="{}".format(str(toset).lower()), headers={"Content-Type": "application/json"})
+		r.raise_for_status()

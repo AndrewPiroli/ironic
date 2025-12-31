@@ -111,6 +111,30 @@ pub(crate) async fn rm_bkpt(State(state): State<DebugProxy>, addr: Json<u32>) ->
     }
 }
 
+pub(crate) async fn get_consoledebug(State(state): State<DebugProxy>) -> (StatusCode, Json<Option<bool>>) {
+    let tx = state.dbg_tx;
+    let rx = state.dbg_rx;
+    tx.send(DebugCommands::ConsoleDebug(None)).unwrap();
+    if let DebugCommands::ConsoleDebug(res) = rx.recv().unwrap() {
+        (StatusCode::OK, Json(Some(res.unwrap())))
+    }
+    else {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(None))
+    }
+}
+
+pub(crate) async fn set_consoledebug(State(state): State<DebugProxy>, Json(set): Json<bool>) -> StatusCode {
+    let tx = state.dbg_tx;
+    let rx = state.dbg_rx;
+    tx.send(DebugCommands::ConsoleDebug(Some(set))).unwrap();
+    if let DebugCommands::Ack = rx.recv().unwrap() {
+        StatusCode::OK
+    }
+    else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
 //unfortunate
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub(crate) enum Width {

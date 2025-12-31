@@ -38,6 +38,8 @@ impl ServerOptions {
             .route("/mem/read", post(bridge::mem_read))
             .route("/mem/write", post(bridge::mem_write))
             .route("/disassemble/{ty}/{addr}", get(bridge::disassmble))
+            .route("/consoledbg", get(bridge::get_consoledebug))
+            .route("/consoledbg", put(bridge::set_consoledebug))
             .with_state(self.proxy);
             axum::serve(l, app).await.unwrap();
         });
