@@ -533,6 +533,15 @@ impl InterpBackend {
                         };
                         tx.send(DebugCommands::Data(response)).unwrap();
                     }
+                    DebugCommands::ConsoleDebug(set) => {
+                        if let Some(set) = set {
+                            self.cpu.dbg_on = set;
+                            tx.send(DebugCommands::Ack).unwrap();
+                        }
+                        else {
+                            tx.send(DebugCommands::ConsoleDebug(Some(self.cpu.dbg_on))).unwrap();
+                        }
+                    }
                     DebugCommands::Data(_) |
                     DebugCommands::Fail |
                     DebugCommands::Ack => todo!(),
