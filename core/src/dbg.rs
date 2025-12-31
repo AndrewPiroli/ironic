@@ -41,6 +41,8 @@ pub enum DebugCommands {
     RemoveBkpt(u32),
     /// Request dissassembly of some memory, true for ARM mode, false for Thumb
     Diassemble((u32, bool)),
+    /// Check or Set Console Debug Print mode
+    ConsoleDebug(Option<bool>),
 }
 
 #[derive(Debug)]
