@@ -9,10 +9,11 @@ use log::error;
 use crate::cpu::coproc::DomainMode;
 
 /// Some kind of memory access (used for determining permissions).
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Access { Read, Write, Debug }
 
 /// Token for a request to the MMU, to translate a virtual address.
+#[derive(Debug, Clone, Copy)]
 pub struct TLBReq {
     pub vaddr: VirtAddr,
     pub kind: Access,
@@ -91,7 +92,7 @@ impl PermissionContext {
 
 
 /// A virtual address.
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 #[repr(transparent)]
 pub struct VirtAddr(pub u32);
 impl VirtAddr {
@@ -107,6 +108,12 @@ impl VirtAddr {
     pub fn section_idx(&self) -> u32 { self.0 & Self::SECTION_IDX }
     pub fn l2_idx_coarse(&self) -> u32 { (self.0 & Self::L2_IDX_COARSE) >> 12 }
     pub fn small_page_idx(&self) -> u32 { self.0 & Self::SMALLPAGE_IDX }
+}
+
+impl core::fmt::LowerHex for VirtAddr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        <u32 as core::fmt::LowerHex>::fmt(&self.0, f)
+    }
 }
 
 

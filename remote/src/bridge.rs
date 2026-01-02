@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use axum::{Json, extract::{Multipart, Path, State}, http::StatusCode};
 use fxhash::FxHashSet;
 use super::*;
-use ironic_core::{bus::prim::BusWidth, dbg::*};
+use ironic_core::{bus::prim::BusWidth, cpu::mmu::prim::Access, dbg::*};
 use log::error;
 use serde::Deserialize;
 
@@ -252,5 +252,50 @@ pub(crate) async fn disassmble(State(state): State<DebugProxy>, Path((ty, addr))
     }
     else {
         (StatusCode::INTERNAL_SERVER_ERROR, String::with_capacity(0))
+    }
+}
+
+pub(crate) async fn translate_debug(State(state): State<DebugProxy>, Path(addr): Path<String>) -> (StatusCode, String) {
+    let addr = match u32::from_str_radix(&addr, 16) {
+        Ok(addr) => addr,
+        Err(err) => return (StatusCode::UNPROCESSABLE_ENTITY, format!("Address \'{addr}\' malformed. {err}"))
+    };
+    match translate_internal(&state, Access::Debug, addr) {
+        Ok(paddr) => (StatusCode::OK, paddr.to_string()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+pub(crate) async fn translate(State(state): State<DebugProxy>, Path((addr, mut access)): Path<(String, String)>) -> (StatusCode, String) {
+    access.make_ascii_lowercase();
+    let access = match access.as_str() {
+        "read" => Access::Read,
+        "write" => Access::Write,
+        "debug" => Access::Debug,
+        _ => return (StatusCode::UNPROCESSABLE_ENTITY, format!("Access {access} not defined. Valid access methods are Read, Write, and Debug."))
+    };
+    let addr = match u32::from_str_radix(&addr, 16) {
+        Ok(addr) => addr,
+        Err(err) => return (StatusCode::UNPROCESSABLE_ENTITY, format!("Address \'{addr}\' malformed. {err}"))
+    };
+    match translate_internal(&state, access, addr) {
+        Ok(paddr) => (StatusCode::OK, paddr.to_string()),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+fn translate_internal(state: &DebugProxy, access: Access, addr: u32) -> anyhow::Result<u32> {
+    use anyhow::bail;
+    let tx = &state.dbg_tx;
+    let rx = &state.dbg_rx;
+    tx.send(DebugCommands::VirtualToPhysical(access, addr)).unwrap();
+    match rx.recv().unwrap() {
+        DebugCommands::Fail(reason) => {
+            bail!("Translation Failure: {}", reason.unwrap_or(String::from("Unknown Failure :/")))
+        },
+        DebugCommands::VirtualToPhysical(_, paddr) => {
+            Ok(paddr)
+        },
+        _ => bail!("Unexpected Message from Debug Proxy")
     }
 }

@@ -21,6 +21,15 @@ class ArmThumbOption(Enum):
 	def __str__(self):
 		return f'{self.name}'
 
+class AccessKind(Enum):
+	"""Memory Access Permission for Tranlation Requests"""
+	Debug = auto()
+	"""Ignores Permission Checks - You probably want this one"""
+	Read = auto()
+	Write = auto()
+	def __str__(self):
+		return f'{self.name}'
+
 
 class RemoteDebugClient:
 	def __init__(self, base_url: str, timeout: float = 5.0) -> None:
@@ -101,3 +110,7 @@ class RemoteDebugClient:
 	def set_consoledbg(self, toset: bool) -> None:
 		r = self.session.put(f"{self.base}/consoledbg", data="{}".format(str(toset).lower()), headers={"Content-Type": "application/json"})
 		r.raise_for_status()
+
+	def translate(self, addr: int, access: AccessKind = AccessKind.Debug) -> requests.Response:
+		r = self.session.get(f"{self.base}/translate/{addr:x}/{access}")
+		return r

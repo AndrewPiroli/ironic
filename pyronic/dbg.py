@@ -2,7 +2,8 @@ import shlex
 from typing import List
 
 from hexdump import hexdump
-from pyronic.httpclient import RemoteDebugClient, Width, ArmThumbOption
+from pyronic.httpclient import RemoteDebugClient, Width, ArmThumbOption, AccessKind
+from requests.exceptions import *
 
 
 class DebugREPL:
@@ -11,7 +12,7 @@ class DebugREPL:
 		self.repeat = False
 		self.last: str | None = None
 
-	def connect(self, url: str) -> None:
+	def connect(self, url: str = "http://localhost:9999") -> None:
 		self.client = RemoteDebugClient(url)
 		print(f"connected to {url}")
 
@@ -82,7 +83,33 @@ class DebugREPL:
 		print("sent interrupt")
 
 	def help(self) -> None:
-		print("commands: connect <url>, regs, setreg <i> <val>, step [n], resume, interrupt, mem view <addr> <size> [B|H|W], bkpt list|add|rm <addr|reg>, consoledbg [on, off, toggle], quit")
+		print(" Debugger Control")
+		print("------------------")
+		print("connect [url] (default = http://localhost:9999)")
+		print("quit")
+		print("repeat")
+		print()
+		print(" Basic Commands")
+		print("----------------")
+		print("step [n]")
+		print("interrupt")
+		print("continue")
+		print("bkpt list|add|rm <addr|reg>")
+		print()
+		print(" Register Info")
+		print("---------------")
+		print("regs")
+		print("setreg <i> <val>")
+		print()
+		print(" Memory Inspection")
+		print("-------------------")
+		print("mem view <addr> <size> [B|H|W]")
+		print("dis <addr|reg> [arm|thumb]")
+		print("translate <addr> [r|w|d]")
+		print()
+		print(" Misc")
+		print("------")
+		print("consoledbg [on|off|toggle]")
 
 	def do_mem_view(self, args: List[str]) -> None:
 		if not self.client:
@@ -184,7 +211,7 @@ class DebugREPL:
 			print("not connected")
 			return
 		client = self.client
-		if not args:
+		if len(args) < 2:
 			print("usage: bkpt list|add|rm <addr|reg>")
 			return
 		sub = args[0]
@@ -241,6 +268,9 @@ class DebugREPL:
 			print("unknown bkpt subcommand")
 	
 	def do_disassemble(self, args: List[str]) -> str | None:
+		if len(args) < 1:
+			print("Usage: disassemble <addr|reg> [arm|thumb]")
+			return
 		addr_arg = args[0]
 		addr = None
 		name_map = {f"r{i}": i for i in range(13)}
@@ -300,9 +330,43 @@ class DebugREPL:
 		else:
 			print("Console Debug Print: Off")
 
+	def translate(self, args: List[str]) -> None:
+		if not self.client:
+			print("Not connected")
+			return
+		if len(args) < 1:
+			print("Usage: translate <addr> [r|w|d]")
+			return
+		access = AccessKind.Debug
+		if len(args) > 1:
+			if args[1].lower() in ("r", "read"):
+				access = AccessKind.Read
+			elif args[1].lower() in ("w", "write"):
+				access = AccessKind.Write
+			elif args[1].lower() not in ("d", "debug"):
+				print("Usage: translate <addr> [r|w|d]")
+				return
+		addr = None
+		name_map = {f"r{i}": i for i in range(13)}
+		name_map.update({"sp": 13, "lr": 14, "pc": 15, "cpsr": 16})
+		if args[0].lower() in name_map:
+				regs = self.client.get_registers()
+				addr = regs[name_map[args[0].lower()]]
+		else:
+			try:
+				addr = int(args[0], 16)
+			except ValueError:
+				print("Invalid address format: {}".format(args[0]))
+				return
+		res = self.client.translate(addr, access)
+		if res.status_code < 300:
+			print(hex(int(res.text)))
+		else:
+			print(res.text)
+
 	def repl(self) -> None:
-		try:
-			while True:
+		while True:
+			try:
 				line = input("dbg> ")
 				if not line:
 					if self.repeat and self.last is not None and not self.last.lower().startswith("repeat"):
@@ -318,9 +382,9 @@ class DebugREPL:
 					break
 				elif cmd == "connect":
 					if not args:
-						print("usage: connect <base_url>")
-						continue
-					self.connect(args[0])
+						self.connect()
+					else:
+						self.connect(args[0])
 				elif cmd == "mem":
 					if not args:
 						print("usage: mem view <addr> <size> [B|H|W]")
@@ -354,10 +418,16 @@ class DebugREPL:
 					self.do_disassemble(args)
 				elif cmd == "consoledbg":
 					self.do_consoledbg(args)
+				elif cmd == "translate":
+					self.translate(args)
 				else:
 					print("unknown command")
-		except (EOFError, KeyboardInterrupt):
-			print()
+			except (EOFError, KeyboardInterrupt):
+				break
+			except ConnectionError:
+				print(f"Connection Failed {self.client.base}")
+			except IndexError:
+				raise
 
 
 if __name__ == "__main__":

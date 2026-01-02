@@ -40,6 +40,8 @@ impl ServerOptions {
             .route("/disassemble/{ty}/{addr}", get(bridge::disassmble))
             .route("/consoledbg", get(bridge::get_consoledebug))
             .route("/consoledbg", put(bridge::set_consoledebug))
+            .route("/translate/{addr}", get(bridge::translate_debug))
+            .route("/translate/{addr}/{access}", get(bridge::translate))
             .with_state(self.proxy);
             axum::serve(l, app).await.unwrap();
         });

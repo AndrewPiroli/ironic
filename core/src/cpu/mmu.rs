@@ -89,8 +89,7 @@ impl Cpu {
 
         let res = L1Descriptor::from_u32(val);
         if let L1Descriptor::Fault(_) = res {
-            bail!(format!("pc={:08x} L1 Fault descriptor unimpl, vaddr={:08x}",
-                self.read_fetch_pc(), vaddr.0));
+            bail!("L1 Fault descriptor unimpl, vaddr={vaddr:08x}");
         }
         Ok(res)
     }

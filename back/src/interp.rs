@@ -541,9 +541,17 @@ impl InterpBackend {
                         else {
                             tx.send(DebugCommands::ConsoleDebug(Some(self.cpu.dbg_on))).unwrap();
                         }
+                    },
+                    DebugCommands::VirtualToPhysical(access, vaddr) => {
+                        use ironic_core::cpu::mmu::prim::*;
+                        let request = TLBReq::new(vaddr, access);
+                        match self.cpu.translate(request) {
+                            Ok(paddr) => tx.send(DebugCommands::VirtualToPhysical(access, paddr)).unwrap(),
+                            Err(err) => tx.send(DebugCommands::Fail(Some(err.to_string()))).unwrap(),
+                        }
                     }
                     DebugCommands::Data(_) |
-                    DebugCommands::Fail |
+                    DebugCommands::Fail(_) |
                     DebugCommands::Ack => todo!(),
                 },
                 Err(_) => {},
