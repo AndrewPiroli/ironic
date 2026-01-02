@@ -3,6 +3,7 @@ pub mod ios;
 use fxhash::FxHashSet;
 
 use crate::bus::prim::BusWidth;
+use crate::cpu::mmu::prim::Access;
 
 use std::sync::mpmc::*;
 
@@ -28,7 +29,7 @@ pub enum DebugCommands {
     /// Acknowledgement
     Ack,
     /// Failure
-    Fail,
+    Fail(Option<String>),
     /// Debugger Disconnected
     Kms,
     /// Resume execution
@@ -43,6 +44,8 @@ pub enum DebugCommands {
     Diassemble((u32, bool)),
     /// Check or Set Console Debug Print mode
     ConsoleDebug(Option<bool>),
+    /// Manually translate a virtual address
+    VirtualToPhysical(Access, u32),
 }
 
 #[derive(Debug)]
