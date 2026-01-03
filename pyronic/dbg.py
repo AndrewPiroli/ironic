@@ -3,7 +3,7 @@ from typing import List
 
 from hexdump import hexdump
 from pyronic.httpclient import RemoteDebugClient, Width, ArmThumbOption, AccessKind
-from requests.exceptions import *
+from requests.exceptions import ConnectionError
 
 
 class DebugREPL:
@@ -268,6 +268,9 @@ class DebugREPL:
 			print("unknown bkpt subcommand")
 	
 	def do_disassemble(self, args: List[str]) -> str | None:
+		if not self.client:
+			print("Not Connected")
+			return
 		if len(args) < 1:
 			print("Usage: disassemble <addr|reg> [arm|thumb]")
 			return
@@ -310,6 +313,9 @@ class DebugREPL:
 			print(f"Failed: {e}")
 
 	def do_consoledbg(self, args: List[str]) -> None:
+		if not self.client:
+			print("Not Connected")
+			return
 		p = None
 		if len(args) == 0:
 			if self.client.get_consoledbg():
@@ -425,6 +431,7 @@ class DebugREPL:
 			except (EOFError, KeyboardInterrupt):
 				break
 			except ConnectionError:
+				assert self.client
 				print(f"Connection Failed {self.client.base}")
 			except IndexError:
 				raise
