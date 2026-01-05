@@ -114,3 +114,8 @@ class RemoteDebugClient:
 	def translate(self, addr: int, access: AccessKind = AccessKind.Debug) -> requests.Response:
 		r = self.session.get(f"{self.base}/translate/{addr:x}/{access}")
 		return r
+
+	def getstatus(self) -> str:
+		r = self.session.get(f"{self.base}/status")
+		r.raise_for_status
+		return r.text
