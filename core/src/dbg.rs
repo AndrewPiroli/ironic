@@ -46,6 +46,8 @@ pub enum DebugCommands {
     ConsoleDebug(Option<bool>),
     /// Manually translate a virtual address
     VirtualToPhysical(Access, u32),
+    /// Status Report
+    Status(String),
 }
 
 #[derive(Debug)]
