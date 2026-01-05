@@ -498,6 +498,13 @@ def cmd_translate(repl: DebugREPL, args: List[str]) -> None:
 	else:
 		print(res.text)
 
+@register_command(["status"], help="Print Status Info")
+def get_status(repl: DebugREPL, args: List[str]) -> None:
+	if not repl.client:
+		print("Not connected")
+		return
+	print(repl.client.getstatus())
+
 
 if __name__ == "__main__":
 	repl = DebugREPL()

@@ -48,19 +48,33 @@ static BOOT1_VERSIONS: &[([u32;5], &str)] = &[
 #[derive(PartialEq)]
 pub enum BootStatus { 
     /// Execution in the mask ROM.
-    Boot0, 
+    Boot0,
     /// Execution in the first-stage bootloader.
-    Boot1, 
+    Boot1,
     /// Execution in the second-stage bootloader stub.
-    Boot2Stub, 
+    Boot2Stub,
     /// Execution in the second-stage bootloader.
-    Boot2, 
+    Boot2,
     /// Execution in the kernel.
-    IOSKernel, 
+    IOSKernel,
 
     /// Execution in a user-loaded foreign kernel.
-    UserKernelStub, 
-    UserKernel, 
+    UserKernelStub,
+    UserKernel,
+}
+
+impl ToString for BootStatus {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Boot0 => "Boot0",
+            Self::Boot1 => "Boot1",
+            Self::Boot2Stub => "Boot2Stub",
+            Self::Boot2 => "Boot2",
+            Self::IOSKernel => "IOSKernel",
+            Self::UserKernelStub => "UserKernelStub",
+            Self::UserKernel => "UserKernel",
+        }.to_owned()
+    }
 }
 
 enum DebugState {
@@ -69,6 +83,17 @@ enum DebugState {
     SingleStep,
     DoneStepPause,
     HitBkpt,
+}
+impl ToString for DebugState {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Run => "Run",
+            Self::Pause => "Pause",
+            Self::SingleStep => "SingleStep",
+            Self::DoneStepPause => "DoneStepPause",
+            Self::HitBkpt => "HitBkpt",
+        }.to_owned()
+    }
 }
 
 struct Debugger {
@@ -549,6 +574,23 @@ impl InterpBackend {
                             Ok(paddr) => tx.send(DebugCommands::VirtualToPhysical(access, paddr)).unwrap(),
                             Err(err) => tx.send(DebugCommands::Fail(Some(err.to_string()))).unwrap(),
                         }
+                    },
+                    #[allow(unused_assignments)]
+                    DebugCommands::Status(mut s) => {
+                        let (mut rom, mut mirror) = ("Unknown", "Unknown");
+                        if let Some(bus) = self.bus.try_read_for(Duration::from_millis(150)) {
+                            rom = if bus.rom_disabled { "Masked" } else { "Enabled" };
+                            mirror = if bus.mirror_enabled { "Enabled" } else { "Disabled" };
+                        }
+                        s = format!("Boot Status: {}\nDebug Status: {}\nCPU Cycle: {}\nBus Cycle: {}\nMirror Config:\n - Boot0: {}\n - SRAM Mirror: {}",
+                            self.boot_status.to_string(),
+                            debugger.state.to_string(),
+                            self.cpu_cycle,
+                            self.bus_cycle,
+                            rom,
+                            mirror,
+                        );
+                        tx.send(DebugCommands::Status(s)).unwrap();
                     }
                     DebugCommands::Data(_) |
                     DebugCommands::Fail(_) |

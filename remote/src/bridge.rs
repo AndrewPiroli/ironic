@@ -299,3 +299,13 @@ fn translate_internal(state: &DebugProxy, access: Access, addr: u32) -> anyhow::
         _ => bail!("Unexpected Message from Debug Proxy")
     }
 }
+
+pub(crate) async fn getstatus(State(state): State<DebugProxy>) -> (StatusCode, String) {
+    let tx = &state.dbg_tx;
+    let rx = &state.dbg_rx;
+    tx.send(DebugCommands::Status(String::with_capacity(0))).unwrap();
+    match rx.recv().unwrap() {
+        DebugCommands::Status(s) => (StatusCode::OK, s),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, String::with_capacity(0)),
+    }
+}

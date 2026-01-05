@@ -42,6 +42,7 @@ impl ServerOptions {
             .route("/consoledbg", put(bridge::set_consoledebug))
             .route("/translate/{addr}", get(bridge::translate_debug))
             .route("/translate/{addr}/{access}", get(bridge::translate))
+            .route("/status", get(bridge::getstatus))
             .with_state(self.proxy);
             axum::serve(l, app).await.unwrap();
         });
