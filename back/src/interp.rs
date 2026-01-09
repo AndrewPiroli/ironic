@@ -77,6 +77,7 @@ impl ToString for BootStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DebugState {
     Run,
     Pause,
@@ -429,6 +430,7 @@ impl InterpBackend {
             if let DebugState::DoneStepPause | DebugState::HitBkpt = debugger.state {
                 debugger.state = DebugState::Pause;
             }
+            if rx.is_empty() && debugger.state == DebugState::Run { return false; }
             match rx.recv_timeout(Duration::from_nanos(1)) {
                 Ok(dc) => match dc {
                     DebugCommands::ReadRegs(_) => {
