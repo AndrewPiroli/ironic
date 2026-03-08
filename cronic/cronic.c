@@ -5,6 +5,8 @@
  */
 
 #define PPC_SOCK "/tmp/ironic-ppc.sock"
+#include <stdbool.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
