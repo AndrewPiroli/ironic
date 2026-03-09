@@ -24,7 +24,8 @@ static bool breakpointsActive[NUM_BREAKPOINTS];
 static bool continuePastBP = false;
 static char *debuggerReason = NULL;
 static uint32_t dbgOldGPRs[32];
-static uint32_t dbgOldPC, dbgOldLR, dbgOldCTR, dbgOldCR, dbgOldXER, dbgOldMSR;
+static uint32_t dbgOldPC, dbgOldLR, dbgOldCTR, dbgOldCR, dbgOldXER, dbgOldMSR, dbgOldSRR0, dbgOldSRR1, dbgOldDEC;
+static uint64_t dbgOldTB;
 
 static void bus_hook(struct ppcemu_state *emu, uint32_t addr, unsigned int len, void *data, bool is_write) {
 	/* emu, addr, len, the pointer to data, and is_write are host-endian; the bytes pointed to by data are big-endian */
@@ -69,6 +70,20 @@ static void bus_hook(struct ppcemu_state *emu, uint32_t addr, unsigned int len, 
 				IPC_Write32(addr, ppcemu_be32_to_le32(*(uint32_t *)data));
 			else
 				*(uint32_t *)data = IPC_Read32(addr);
+		}
+		else if (len == 32) { /* cacheline fill / store */
+			if (is_write) {
+#ifdef DEBUG_BUS
+				printf("Filling cacheline from 0x%08x\r\n", addr);
+#endif
+				IPC_Write(addr, data, len);
+			}
+			else {
+#ifdef DEBUG_BUS
+				printf("Storing cacheline from 0x%08x\r\n", addr);
+#endif
+				IPC_Read(addr, data, len);
+			}
 		}
 	}
 	else {
@@ -154,9 +169,9 @@ Commands:\r\n\
 	log [source] [level]	Set logging level for [source] to [level],\r\n\
 				where [source] is one of \"translation\",\r\n\
 				\"ifetch\",\"decode\", \"branch\",\r\n\
-				\"loadstore\", or \"misc\", and [level]\r\n\
-				is one of \"debug\", \"verbose\", \"info\",\r\n\
-				\"warn\", or \"error\".");
+				\"loadstore\", \"cache\", or \"misc\", and\r\n\
+				[level] is one of \"debug\", \"verbose\",\r\n\
+				\"info\", \"warn\", or \"error\".");
 }
 
 
@@ -203,11 +218,19 @@ static void dbgPrintReg(const char *prefix, uint32_t new, uint32_t old) {
 		printf("%s\x1b[0m %08x ", prefix, new);
 }
 
+static void dbgPrintReg64(const char *prefix, uint64_t new, uint64_t old) {
+	if (new != old)
+		printf("%s\x1b[1;31m[%016x]\x1b[0m", prefix, new);
+	else
+		printf("%s\x1b[0m %016x ", prefix, new);
+}
+
 
 static void dbgRegDump(struct ppcemu_state *emu) {
 	uint32_t gpr[32];
 	uint64_t fpr[32];
-	uint32_t pc, msr, lr, xer, cr, ctr;
+	uint64_t tb;
+	uint32_t pc, msr, lr, xer, cr, ctr, srr0, srr1, dec;
 	int i;
 
 	for (i = 0; i < 32; i++)
@@ -218,7 +241,11 @@ static void dbgRegDump(struct ppcemu_state *emu) {
 	lr = ppcemu_get_spr(emu, PPCEMU_SPRN_LR);
 	xer = ppcemu_get_spr(emu, PPCEMU_SPRN_XER);
 	ctr = ppcemu_get_spr(emu, PPCEMU_SPRN_CTR);
+	srr0 = ppcemu_get_spr(emu, PPCEMU_SPRN_SRR0);
+	srr1 = ppcemu_get_spr(emu, PPCEMU_SPRN_SRR1);
+	dec = ppcemu_get_spr(emu, PPCEMU_SPRN_DEC);
 	cr = ppcemu_get_cr(emu);
+	tb = ppcemu_get_tb(emu);
 
 	puts("GPRs:");
 	puts("     r0-r7         r8-r15        r16-r23       r24-r31");
@@ -235,12 +262,17 @@ static void dbgRegDump(struct ppcemu_state *emu) {
 	puts("");
 	dbgPrintReg("PC: ", pc, dbgOldPC);
 	dbgPrintReg("    MSR: ", msr, dbgOldMSR);
+	dbgPrintReg("    XER: ", xer, dbgOldXER);
 	puts("");
 	dbgPrintReg("LR: ", lr, dbgOldLR);
-	dbgPrintReg("    XER: ", xer, dbgOldXER);
+	dbgPrintReg("   SRR0: ", srr0, dbgOldSRR0);
+	dbgPrintReg("   SRR1: ", srr1, dbgOldSRR1);
 	puts("");
 	dbgPrintReg("CR: ", cr, dbgOldCR);
 	dbgPrintReg("    CTR: ", ctr, dbgOldCTR);
+	dbgPrintReg("    DEC: ", dec, dbgOldDEC);
+	puts("");
+	dbgPrintReg64("TB: ", tb, dbgOldTB);
 	puts("");
 
 	dbgOldPC = pc;
@@ -249,6 +281,10 @@ static void dbgRegDump(struct ppcemu_state *emu) {
 	dbgOldXER = xer;
 	dbgOldCR = cr;
 	dbgOldCTR = ctr;
+	dbgOldSRR0 = srr0;
+	dbgOldSRR1 = srr1;
+	dbgOldDEC = dec;
+	dbgOldTB = tb;
 }
 
 static void debugger(struct ppcemu_state *emu) {
@@ -419,7 +455,7 @@ static void debugger(struct ppcemu_state *emu) {
 	else if (!strcmp(cmd, "bl")) {
 		for (i = 0; i < NUM_BREAKPOINTS; i++) {
 			if (breakpointsActive[i])
-				printf("Breakpoint %d: 0x%08x\r\n", breakpoints[i]);
+				printf("Breakpoint %d: 0x%08x\r\n", i, breakpoints[i]);
 		}
 	}
 	else if (!strcmp(cmd, "bd")) {
@@ -457,6 +493,8 @@ static void debugger(struct ppcemu_state *emu) {
 			source = PPCEMU_LOG_SOURCE_BRANCH;
 		else if (!strcmp(arg, "loadstore"))
 			source = PPCEMU_LOG_SOURCE_LOADSTORE;
+		else if (!strcmp(arg, "cache"))
+			source = PPCEMU_LOG_SOURCE_CACHE;
 		else if (!strcmp(arg, "misc"))
 			source = PPCEMU_LOG_SOURCE_MISC;
 		else {
@@ -561,7 +599,7 @@ int main(void) {
 
 	if (IPC_Init()) {
 		puts("cronic init failed");
-//		return 1;
+		return 1;
 	}
 
 	/* to break into the debugger */
