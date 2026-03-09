@@ -191,3 +191,52 @@ void IPC_Write32(uint32_t addr, uint32_t data) {
 
 	return;
 }
+
+/* FIXME: should use a proper PPC 'read buffer' command at some point */
+void IPC_Read(uint32_t addr, void *data, unsigned int len) {
+	msg.u32[0] = cronic_cpu_to_le32(IRONIC_READ);
+	msg.u32[1] = cronic_cpu_to_le32(addr);
+	msg.u32[2] = cronic_cpu_to_le32(len);
+
+	if (write(IPC_Sock, &msg, 12) != 12) {
+		IPC_Err = 1;
+		return;
+	}
+
+	if (read(IPC_Sock, data, len) != len) {
+		IPC_Err = 1;
+		return;
+	}
+
+	return;
+}
+
+/* FIXME: should use a proper PPC 'write buffer' command at some point */
+void IPC_Write(uint32_t addr, void *data, unsigned int len) {
+	char resp[2];
+	msg.u32[0] = cronic_cpu_to_le32(IRONIC_WRITE);
+	msg.u32[1] = cronic_cpu_to_le32(addr);
+	msg.u32[2] = cronic_cpu_to_le32(len);
+	if (len > sizeof(msg) - 12) {
+		printf("IPC_Write: data too big: %u\r\n", len);
+		return;
+	}
+	memcpy(&msg.u32[3], data, len);
+
+	if (write(IPC_Sock, &msg, 12 + len) != 12 + len) {
+		IPC_Err = 1;
+		return;
+	}
+
+	if (read(IPC_Sock, resp, 2) != 2) {
+		IPC_Err = 1;
+		return;
+	}
+
+	if (strncmp(resp, "OK", 2) != 0) {
+		IPC_Err = 1;
+		return;
+	}
+
+	return;
+}

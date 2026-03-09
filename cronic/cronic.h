@@ -13,9 +13,9 @@ extern bool IPC_Initialized;
 extern int IPC_Err;
 
 typedef union {
-	uint32_t u32[4];
-	uint32_t u16[8];
-	uint8_t  u8 [16];
+	uint32_t u32[36];
+	uint32_t u16[72];
+	uint8_t  u8 [144];
 } ipc_msg_t;
 
 enum {
@@ -40,5 +40,9 @@ extern uint32_t IPC_Read32(uint32_t addr);
 extern void IPC_Write8(uint32_t addr, uint8_t data);
 extern void IPC_Write16(uint32_t addr, uint16_t data);
 extern void IPC_Write32(uint32_t addr, uint32_t data);
+
+/* only suitable for reads from MEM1/MEM2, for hardware regs, use IPC_ReadN/WriteN */
+extern void IPC_Read(uint32_t addr, void *data, unsigned int len);
+extern void IPC_Write(uint32_t addr, void *data, unsigned int len);
 
 #endif /* _CRONIC_CRONIC_H */
