@@ -18,9 +18,11 @@ pub fn bl_prefix(cpu: &mut Cpu, op: BlBits) -> DispatchRes {
     let offset = sign_extend((op.imm11() as u32) << 12, 23);
     let res = (cpu.read_exec_pc() as i32).wrapping_add(offset);
     cpu.scratch = res as u32;
+    cpu.dispatching_double_wide_instr = true;
     DispatchRes::RetireOk
 }
 pub fn bl_imm_suffix(cpu: &mut Cpu, op: BlBits) -> DispatchRes {
+    cpu.dispatching_double_wide_instr = false;
     assert!(op.h() == 0x3);
     let offset = (op.imm11() as u32) << 1;
     let dest_pc = cpu.scratch.wrapping_add(offset);
@@ -30,6 +32,7 @@ pub fn bl_imm_suffix(cpu: &mut Cpu, op: BlBits) -> DispatchRes {
     DispatchRes::RetireBranch
 }
 pub fn blx_imm_suffix(cpu: &mut Cpu, op: BlBits) -> DispatchRes {
+    cpu.dispatching_double_wide_instr = false;
     assert!(op.h() == 0x1);
     let new_lr = cpu.read_fetch_pc().wrapping_add(2) | 1;
     let dest_pc = (cpu.scratch.wrapping_add((op.imm11() << 1) as u32)) & 0xfffffffc;

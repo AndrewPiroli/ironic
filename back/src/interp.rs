@@ -276,7 +276,7 @@ impl InterpBackend {
 
         // Sample the IRQ line. If the IRQ line is high and IRQs are not 
         // disabled in the CPSR, take an IRQ exception. 
-        if !self.cpu.reg.cpsr.irq_disable() && self.cpu.irq_input {
+        if !self.cpu.reg.cpsr.irq_disable() && self.cpu.irq_input && !self.cpu.dispatching_double_wide_instr {
             if let Err(reason) = self.cpu.generate_exception(ExceptionType::Irq){
                 return CpuRes::HaltEmulation(reason);
             };
