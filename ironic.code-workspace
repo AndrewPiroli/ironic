@@ -59,14 +59,15 @@
 						"build",
 						"--manifest-path=${workspaceFolder:root}/Cargo.toml",
 						"--bin=ironic-tui",
-						"--package=ironic-tui"
+						"--package=ironic-tui",
+						"--profile=deboog"
 					],
 					"filter": {
 						"name": "ironic-tui",
 						"kind": "bin"
 					}
 				},
-				"args": ["-c", "starstruck-feature.elf", "-p", "true"],
+				"args": ["-c", "starstruck-feature.elf", "-p"],
 				"cwd": "${workspaceFolder:root}"
 			},
 			{
@@ -85,7 +86,7 @@
 						"kind": "bin"
 					}
 				},
-				"args": ["-p", "true"],
+				"args": ["-p"],
 				"cwd": "${workspaceFolder:root}"
 			},
 		]
