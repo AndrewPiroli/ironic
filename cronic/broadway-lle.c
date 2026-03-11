@@ -313,6 +313,9 @@ static void debugger(struct ppcemu_state *emu) {
 		cmdSize--;
 	}
 
+	if (cmd[0] == '\r' || cmd[0] == '\n' || cmd[0] == '\0')
+		return;
+
 	/* split by space */
 	strtok(cmd, " ");
 
