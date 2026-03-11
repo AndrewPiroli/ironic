@@ -580,12 +580,29 @@ pub fn bic_rsr(cpu: &mut Cpu, op: DpRsrBits) -> DispatchRes {
 }
 
 pub fn adc_imm(cpu: &mut Cpu, op: DpImmBits) -> DispatchRes {
-    let (res, n, z, c,v ) = add_generic(cpu.reg[op.rn()], op.imm12());
-    cpu.reg[op.rd()] = res;
-    if op.s() {
-        set_all_flags!(cpu, n, z, c, v);
+    let val = cpu.reg[op.rn()].wrapping_add(cpu.reg.cpsr.c() as u32);
+    let (res, n, z, c,v ) = add_generic(val, op.imm12());
+    match (op.rd() == 15, op.s()) {
+        (true, true) => {
+            if let Err(reason) = cpu.exception_return(res) {
+                return DispatchRes::FatalErr(reason);
+            }
+            DispatchRes::RetireBranch
+        },
+        (true, false) => {
+            cpu.write_exec_pc(val);
+            DispatchRes::RetireBranch
+        },
+        (false, true) => {
+            cpu.reg[op.rd()] = res;
+            set_all_flags!(cpu, n, z, c, v);
+            DispatchRes::RetireOk
+        },
+        (false, false) => {
+            cpu.reg[op.rd()] = res;
+            DispatchRes::RetireOk
+        },
     }
-    DispatchRes::RetireOk
 }
 
 pub fn teq_imm(cpu: &mut Cpu, op: DpTestImmBits) -> DispatchRes {
