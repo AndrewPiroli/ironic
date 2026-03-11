@@ -4,8 +4,8 @@ use crate::bits::arm::*;
 use crate::interp::DispatchRes;
 
 pub fn umull(cpu: &mut Cpu, op: SignedMlBits) -> DispatchRes {
-    let rm_val = cpu.reg[op.rm()] as usize;
-    let rn_val = cpu.reg[op.rn()] as usize;
+    let rm_val = cpu.reg[op.rm()] as u64;
+    let rn_val = cpu.reg[op.rn()] as u64;
     let res = rm_val * rn_val;
 
     let res_hi = ((res & 0xffff_ffff_0000_0000) >> 32) as u32;
@@ -21,8 +21,8 @@ pub fn umull(cpu: &mut Cpu, op: SignedMlBits) -> DispatchRes {
 
 
 pub fn mul(cpu: &mut Cpu, op: MulBits) -> DispatchRes {
-    let rm_val = cpu.reg[op.rm()] as usize;
-    let rn_val = cpu.reg[op.rn()] as usize;
+    let rm_val = cpu.reg[op.rm()] as u64;
+    let rn_val = cpu.reg[op.rn()] as u64;
     let res = ((rm_val * rn_val) & 0x0000_0000_ffff_ffff) as u32;
     cpu.reg[op.rd()] = res;
     if op.s() {
