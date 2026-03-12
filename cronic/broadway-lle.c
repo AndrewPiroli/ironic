@@ -39,6 +39,8 @@ static void bus_hook(struct ppcemu_state *emu, uint32_t addr, unsigned int len, 
 			printf("%04x\r\n", ppcemu_be16_to_cpu(*(uint16_t *)data));
 		else if (len == 4)
 			printf("%08x\r\n", ppcemu_be32_to_cpu(*(uint32_t *)data));
+		else
+			printf("[buffer]\r\n");
 	}
 	else
 		puts("");
