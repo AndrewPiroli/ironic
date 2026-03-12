@@ -14,7 +14,7 @@ extern int IPC_Err;
 
 typedef union {
 	uint32_t u32[36];
-	uint32_t u16[72];
+	uint16_t u16[72];
 	uint8_t  u8 [144];
 } ipc_msg_t;
 
