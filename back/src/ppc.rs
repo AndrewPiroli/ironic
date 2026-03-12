@@ -320,7 +320,7 @@ impl PpcBackend {
 
     /// Write to physical memory.
     pub fn handle_write8(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
-        info!(target: "PPC", "write8 at {:08x} with {:08x}", req.addr, req.len);
+        info!(target: "PPC", "write8 at {:08x} with {:02x}", req.addr, self.ibuf[0xc]);
         let _ = self.bus.write().write8(req.addr, self.ibuf[0xc])?;
         let _ = client.write("OK".as_bytes())?; // maybe FIXME: is it ok to ignore the # of bytes written here?
         Ok(())
@@ -328,8 +328,8 @@ impl PpcBackend {
 
     /// Write to physical memory.
     pub fn handle_write16(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
-        info!(target: "PPC", "write16 at {:08x} with {:08x}", req.addr, req.len);
         let val = u16::from_le_bytes(self.ibuf[0xc..0xe].try_into().unwrap());
+        info!(target: "PPC", "write16 at {:08x} with {:04x}", req.addr, val);
         let _ = self.bus.write().write16(req.addr, val)?;
         let _ = client.write("OK".as_bytes())?; // maybe FIXME: is it ok to ignore the # of bytes written here?
         Ok(())
@@ -337,8 +337,8 @@ impl PpcBackend {
 
     /// Write to physical memory.
     pub fn handle_write32(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
-        info!(target: "PPC", "write32 at {:08x} with {:08x}", req.addr, req.len);
         let val = u32::from_le_bytes(self.ibuf[0xc..0x10].try_into().unwrap());
+        info!(target: "PPC", "write32 at {:08x} with {:08x}", req.addr, val);
         let _ = self.bus.write().write32(req.addr, val)?;
         let _ = client.write("OK".as_bytes())?; // maybe FIXME: is it ok to ignore the # of bytes written here?
         Ok(())
