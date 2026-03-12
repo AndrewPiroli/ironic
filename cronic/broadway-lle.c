@@ -538,11 +538,13 @@ static void debugger(struct ppcemu_state *emu) {
 				/* TODO: reset */
 				running = true;
 			}
+			ppcemu_set_timing_mode(emu, PPCEMU_TIMING_MODE_RT);
 		}
 		else {
 			running = true;
 			started = true;
 			singleStep = false;
+			ppcemu_set_timing_mode(emu, PPCEMU_TIMING_MODE_RT);
 		}
 	}
 	else if (!strcmp(cmd, "c") || !strcmp(cmd, "cont") || !strcmp(cmd, "continue")) {
@@ -550,6 +552,7 @@ static void debugger(struct ppcemu_state *emu) {
 			running = true;
 			continuePastBP = true;
 			singleStep = false;
+			ppcemu_set_timing_mode(emu, PPCEMU_TIMING_MODE_RT);
 		}
 		else
 			puts("The emulated Broadway is not running, cannot continue.");
@@ -558,6 +561,7 @@ static void debugger(struct ppcemu_state *emu) {
 		running = true;
 		singleStep = true;
 		continuePastBP = true;
+		ppcemu_set_timing_mode(emu, PPCEMU_TIMING_MODE_SYNTH);
 	}
 	else
 		printf("Unknown command: %s.  Try \"help\" for help.\r\n", cmd);
