@@ -1,14 +1,55 @@
 use anyhow::bail;
-use log::info;
+use log::{info, warn};
 
 use crate::bus::prim::*;
 use crate::bus::mmio::*;
 use crate::bus::task::*;
 
 /// Legacy Video Interface
+/// Yes, it sadly needs to support all of this weird incorrect-size access stuff,
+/// some software like CEIL1NG_CAT, other ppcskel-derived software, and everything
+/// built with PowerBlocks, relies on dumping a blob of 16-bit values into VI, and this
+/// technically works on real hardware.
 #[derive(Default, Debug, Clone)]
 pub struct VideoInterface {
-    pub clk: u16
+    pub vtr: u16,
+    pub dcr: u16,
+    pub htr0: u32,
+    pub htr1: u32,
+    pub vto: u32,
+    pub vte: u32,
+    pub bbei: u32,
+    pub bboi: u32,
+    pub tfbl: u32,
+    pub tfbr: u32,
+    pub bfbl: u32,
+    pub bfbr: u32,
+    pub dpv: u16,
+    pub dph: u16,
+    pub di0: u32,
+    pub di1: u32,
+    pub di2: u32,
+    pub di3: u32,
+    pub dl0: u32,
+    pub dl1: u32,
+    pub hsw: u16,
+    pub hsr: u16,
+    pub fct0: u32,
+    pub fct1: u32,
+    pub fct2: u32,
+    pub fct3: u32,
+    pub fct4: u32,
+    pub fct5: u32,
+    pub fct6: u32,
+    pub unk_68: u32,
+    pub viclk: u16,
+    pub visel: u16,
+    pub unk_70: u16,
+    pub hbe: u16,
+    pub hbs: u16,
+    pub unk_76: u16,
+    pub unk_78: u32,
+    pub unk_7c: u32
 }
 impl MmioDeviceMultiWidth for VideoInterface {
     fn read8(&self, off: usize) -> anyhow::Result<BusPacket> {
@@ -17,16 +58,111 @@ impl MmioDeviceMultiWidth for VideoInterface {
 
     fn read16(&self, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
-            0x6c => self.clk,
+            0x00 => self.vtr,
+            0x02 => self.dcr,
+            0x04 => (self.htr0 >> 16) as u16,
+            0x06 => (self.htr0 & 0xffff) as u16,
+            0x08 => (self.htr1 >> 16) as u16,
+            0x0a => (self.htr1 & 0xffff) as u16,
+            0x0c => (self.vto >> 16) as u16,
+            0x0e => (self.vto & 0xffff) as u16,
+            0x10 => (self.vte >> 16) as u16,
+            0x12 => (self.vte & 0xffff) as u16,
+            0x14 => (self.bbei >> 16) as u16,
+            0x16 => (self.bbei & 0xffff) as u16,
+            0x18 => (self.bboi >> 16) as u16,
+            0x1a => (self.bboi & 0xffff) as u16,
+            0x1c => (self.tfbl >> 16) as u16,
+            0x1e => (self.tfbl & 0xffff) as u16,
+            0x20 => (self.tfbr >> 16) as u16,
+            0x22 => (self.tfbr & 0xffff) as u16,
+            0x24 => (self.bfbl >> 16) as u16,
+            0x26 => (self.bfbl & 0xfff) as u16,
+            0x28 => (self.bfbr >> 16) as u16,
+            0x2a => (self.bfbr & 0xffff) as u16,
+            0x2c => self.dpv,
+            0x2e => self.dph,
+            0x30 => (self.di0 >> 16) as u16,
+            0x32 => (self.di0 & 0xffff) as u16,
+            0x34 => (self.di1 >> 16) as u16,
+            0x36 => (self.di1 & 0xffff) as u16,
+            0x38 => (self.di2 >> 16) as u16,
+            0x3a => (self.di2 & 0xffff) as u16,
+            0x3c => (self.di3 >> 16) as u16,
+            0x3e => (self.di3 & 0xffff) as u16,
+            0x40 => (self.dl0 >> 16) as u16,
+            0x42 => (self.dl0 & 0xffff) as u16,
+            0x44 => (self.dl1 >> 16) as u16,
+            0x46 => (self.dl1 & 0xffff) as u16,
+            0x48 => self.hsw,
+            0x4a => self.hsr,
+            0x4c => (self.fct0 >> 16) as u16,
+            0x4e => (self.fct0 & 0xffff) as u16,
+            0x50 => (self.fct1 >> 16) as u16,
+            0x52 => (self.fct1 & 0xffff) as u16,
+            0x54 => (self.fct2 >> 16) as u16,
+            0x56 => (self.fct2 & 0xffff) as u16,
+            0x58 => (self.fct3 >> 16) as u16,
+            0x5a => (self.fct3 & 0xffff) as u16,
+            0x5c => (self.fct4 >> 16) as u16,
+            0x5e => (self.fct4 & 0xffff) as u16,
+            0x60 => (self.fct5 >> 16) as u16,
+            0x62 => (self.fct5 & 0xffff) as u16,
+            0x64 => (self.fct6 >> 16) as u16,
+            0x66 => (self.fct6 & 0xffff) as u16,
+            0x68 => (self.unk_68 >> 16) as u16,
+            0x6a => (self.unk_68 & 0xffff) as u16,
+            0x6c => self.viclk,
+            0x6e => self.visel,
+            0x70 => self.unk_70,
+            0x72 => self.hbe,
+            0x74 => self.hbs,
+            0x76 => self.unk_76,
+            0x78 => (self.unk_78 >> 16) as u16,
+            0x7a => (self.unk_78 & 0xffff) as u16,
+            0x7c => (self.unk_7c >> 16) as u16,
+            0x7e => (self.unk_7c & 0xffff) as u16,
             _ => { bail!("VI 16-bit read from undefined offset {off:x}"); },
         };
         Ok(BusPacket::Half(val))
     }
     fn read32(&self, off: usize) -> anyhow::Result<BusPacket> {
-        let _val = match off {
+        let val = match off {
+            0x00 => ((self.vtr as u32) << 16) | (self.dcr as u32),
+            0x04 => self.htr0,
+            0x08 => self.htr1,
+            0x0c => self.vto,
+            0x10 => self.vte,
+            0x14 => self.bbei,
+            0x18 => self.bboi,
+            0x1c => self.tfbl,
+            0x20 => self.tfbr,
+            0x24 => self.bfbl,
+            0x28 => self.bfbr,
+            0x2c => ((self.dpv as u32) << 16) | (self.dph as u32),
+            0x30 => self.di0,
+            0x34 => self.di1,
+            0x38 => self.di2,
+            0x3c => self.di3,
+            0x40 => self.dl0,
+            0x44 => self.dl1,
+            0x48 => ((self.hsw as u32) << 16) | (self.hsr as u32),
+            0x4c => self.fct0,
+            0x50 => self.fct1,
+            0x54 => self.fct2,
+            0x58 => self.fct3,
+            0x5c => self.fct4,
+            0x60 => self.fct5,
+            0x64 => self.fct6,
+            0x68 => self.unk_68,
+            0x6c => ((self.viclk as u32) << 16) | (self.visel as u32),
+            0x70 => ((self.unk_70 as u32) << 16) | (self.hbe as u32),
+            0x74 => ((self.hbs as u32) << 16) | (self.unk_76 as u32),
+            0x78 => self.unk_78,
+            0x7c => self.unk_7c,
             _ => { bail!("VI 32-bit read from undefined offset {off:x}"); },
         };
-        //Ok(BusPacket::Word(val))
+        Ok(BusPacket::Word(val))
     }
 
 
@@ -36,16 +172,79 @@ impl MmioDeviceMultiWidth for VideoInterface {
 
     fn write16(&mut self, off: usize, val: u16) -> anyhow::Result<Option<BusTask>> {
         match off {
+            0x00 => self.vtr = val,
+            0x02 => self.dcr = val,
+            0x04 => { self.htr0 &= 0x0000ffff; self.htr0 |= (val as u32) << 16; },
+            0x06 => { self.htr0 &= 0xffff0000; self.htr0 |= val as u32; },
+            0x08 => { self.htr1 &= 0x0000ffff; self.htr1 |= (val as u32) << 16; },
+            0x0a => { self.htr1 &= 0xffff0000; self.htr1 |= val as u32; },
+            0x0c => { self.vto &= 0x0000ffff; self.vto |= (val as u32) << 16; },
+            0x0e => { self.vto &= 0xffff0000; self.vto |= val as u32; },
+            0x10 => { self.vte &= 0x0000ffff; self.vte |= (val as u32) << 16; },
+            0x12 => { self.vte &= 0xffff0000; self.vte |= val as u32; },
+            0x14 => { self.bbei &= 0x0000ffff; self.bbei |= (val as u32) << 16; },
+            0x16 => { self.bbei &= 0xffff0000; self.bbei |= val as u32; },
+            0x18 => { self.bboi &= 0x0000ffff; self.bboi |= (val as u32) << 16; },
+            0x1a => { self.bboi &= 0xffff0000; self.bboi |= val as u32; },
+            0x1c => { self.tfbl &= 0x0000ffff; self.tfbl |= (val as u32) << 16; },
+            0x1e => { self.tfbl &= 0xffff0000; self.tfbl |= val as u32; },
+            0x20 => { self.tfbr &= 0x0000ffff; self.tfbr |= (val as u32) << 16; },
+            0x22 => { self.tfbr &= 0xffff0000; self.tfbr |= val as u32; },
+            0x24 => { self.bfbl &= 0x0000ffff; self.bfbl |= (val as u32) << 16; },
+            0x26 => { self.bfbl &= 0xfff0000; self.bfbl |= val as u32; },
+            0x28 => { self.bfbr &= 0x0000ffff; self.bfbr |= (val as u32) << 16; },
+            0x2a => { self.bfbr &= 0xffff0000; self.bfbr |= val as u32; },
+            0x2c => warn!(target: "VI", "Writing to DPV makes no sense"),
+            0x2e => warn!(target: "VI", "Writing to DPH makes no sense"),
+            0x30 => { self.di0 &= 0x0000ffff; self.di0 |= (val as u32) << 16; },
+            0x32 => { self.di0 &= 0xffff0000; self.di0 |= val as u32; },
+            0x34 => { self.di1 &= 0x0000ffff; self.di1 |= (val as u32) << 16; },
+            0x36 => { self.di1 &= 0xffff0000; self.di1 |= val as u32; },
+            0x38 => { self.di2 &= 0x0000ffff; self.di2 |= (val as u32) << 16; },
+            0x3a => { self.di2 &= 0xffff0000; self.di2 |= val as u32; },
+            0x3c => { self.di3 &= 0x0000ffff; self.di3 |= (val as u32) << 16; },
+            0x3e => { self.di3 &= 0xffff0000; self.di3 |= val as u32; },
+            0x40 => { self.dl0 &= 0x0000ffff; self.dl0 |= (val as u32) << 16; },
+            0x42 => { self.dl0 &= 0xffff0000; self.dl0 |= val as u32; },
+            0x44 => { self.dl1 &= 0x0000ffff; self.dl1 |= (val as u32) << 16; },
+            0x46 => { self.dl1 &= 0xffff0000; self.dl1 |= val as u32; },
+            0x48 => self.hsw = val,
+            0x4a => self.hsr = val,
+            0x4c => { self.fct0 &= 0x0000ffff; self.fct0 |= (val as u32) << 16; },
+            0x4e => { self.fct0 &= 0xffff0000; self.fct0 |= val as u32; },
+            0x50 => { self.fct1 &= 0x0000ffff; self.fct1 |= (val as u32) << 16; },
+            0x52 => { self.fct1 &= 0xffff0000; self.fct1 |= val as u32; },
+            0x54 => { self.fct2 &= 0x0000ffff; self.fct2 |= (val as u32) << 16; },
+            0x56 => { self.fct2 &= 0xffff0000; self.fct2 |= val as u32; },
+            0x58 => { self.fct3 &= 0x0000ffff; self.fct3 |= (val as u32) << 16; },
+            0x5a => { self.fct3 &= 0xffff0000; self.fct3 |= val as u32; },
+            0x5c => { self.fct4 &= 0x0000ffff; self.fct4 |= (val as u32) << 16; },
+            0x5e => { self.fct4 &= 0xffff0000; self.fct4 |= val as u32; },
+            0x60 => { self.fct5 &= 0x0000ffff; self.fct5 |= (val as u32) << 16; },
+            0x62 => { self.fct5 &= 0xffff0000; self.fct5 |= val as u32; },
+            0x64 => { self.fct6 &= 0x0000ffff; self.fct6 |= (val as u32) << 16; },
+            0x66 => { self.fct6 &= 0xffff0000; self.fct6 |= val as u32; },
+            0x68 => { self.unk_68 &= 0x0000ffff; self.unk_68 |= (val as u32) << 16; },
+            0x6a => { self.unk_68 &= 0xffff0000; self.unk_68 |= val as u32; },
             0x6c => {
                 if val == 1 {
                     info!(target: "VI", "Setting video clock to 54MHz");
                 } else if val == 0 {
                     info!(target: "VI", "Setting video clock to 27MHz");
                 } else {
-                    bail!("Trying to set bogus VI clock speed {val:x}");
+                    warn!("Trying to set bogus VI clock speed {val:x}");
                 }
-                self.clk = val as u16;
-            }
+                self.viclk = val;
+            },
+            0x6e => self.visel = val,
+            0x70 => self.unk_70 = val,
+            0x72 => self.hbe = val,
+            0x74 => self.hbs = val,
+            0x76 => self.unk_76 = val,
+            0x78 => { self.unk_78 &= 0x0000ffff; self.unk_78 |= (val as u32) << 16; },
+            0x7a => { self.unk_78 &= 0xffff0000; self.unk_78 |= val as u32; },
+            0x7c => { self.unk_7c &= 0x0000ffff; self.unk_7c |= (val as u32) << 16; },
+            0x7e => { self.unk_7c &= 0xffff0000; self.unk_7c |= val as u32; },
             _ => { bail!("VI 16-bit write {val:04x} to undefined offset {off:x}"); },
         }
         Ok(None)
@@ -53,8 +252,40 @@ impl MmioDeviceMultiWidth for VideoInterface {
 
     fn write32(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
+            0x00 => { self.vtr = (val >> 16) as u16; self.dcr = (val & 0xffff) as u16; },
+            0x04 => self.htr0 = val,
+            0x08 => self.htr1 = val,
+            0x0c => self.vto = val,
+            0x10 => self.vte = val,
+            0x14 => self.bbei = val,
+            0x18 => self.bboi = val,
+            0x1c => self.tfbl = val,
+            0x20 => self.tfbr = val,
+            0x24 => self.bfbl = val,
+            0x28 => self.bfbr = val,
+            0x2c => warn!(target: "VI", "Writing to DPV/DPH makes no sense"),
+            0x30 => self.di0 = val,
+            0x34 => self.di1 = val,
+            0x38 => self.di2 = val,
+            0x3c => self.di3 = val,
+            0x40 => self.dl0 = val,
+            0x44 => self.dl1 = val,
+            0x48 => { self.hsw = (val >> 16) as u16; self.hsr = (val & 0xffff) as u16; },
+            0x4c => self.fct0 = val,
+            0x50 => self.fct1 = val,
+            0x54 => self.fct2 = val,
+            0x58 => self.fct3 = val,
+            0x5c => self.fct4 = val,
+            0x60 => self.fct5 = val,
+            0x64 => self.fct6 = val,
+            0x68 => self.unk_68 = val,
+            0x6c => { self.viclk = (val >> 16) as u16; self.visel = (val & 0xffff) as u16; },
+            0x70 => { self.unk_70 = (val >> 16) as u16; self.hbe = (val & 0xffff) as u16; },
+            0x74 => { self.hbs = (val >> 16) as u16; self.unk_76 = (val & 0xffff) as u16; },
+            0x78 => self.unk_78 = val,
+            0x7c => self.unk_7c = val,
             _ => { bail!("VI 32-bit write {val:08x} to undefined offset {off:x}"); },
         }
-        //Ok(None)
+        Ok(None)
     }
 }
