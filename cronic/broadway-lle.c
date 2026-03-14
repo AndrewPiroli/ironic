@@ -14,6 +14,7 @@
 
 /*#define DEBUG_BUS*/
 #define NUM_BREAKPOINTS 16
+#define NUM_WATCHPOINTS 16
 
 static bool previouslyRunning = false;
 static bool running = false;
@@ -21,11 +22,14 @@ static bool started = false;
 static bool singleStep = false;
 static uint32_t breakpoints[NUM_BREAKPOINTS];
 static bool breakpointsActive[NUM_BREAKPOINTS];
+static uint32_t watchpoints[NUM_WATCHPOINTS];
+static bool watchpointsActive[NUM_WATCHPOINTS];
 static bool continuePastBP = false;
 static char *debuggerReason = NULL;
 static uint32_t dbgOldGPRs[32];
 static uint32_t dbgOldPC, dbgOldLR, dbgOldCTR, dbgOldCR, dbgOldXER, dbgOldMSR, dbgOldSRR0, dbgOldSRR1, dbgOldDEC;
 static uint64_t dbgOldTB;
+static void debugger(struct ppcemu_state *emu);
 
 static void bus_hook(struct ppcemu_state *emu, uint32_t addr, unsigned int len, void *data, bool is_write) {
 	/* emu, addr, len, the pointer to data, and is_write are host-endian; the bytes pointed to by data are big-endian */
@@ -94,6 +98,31 @@ static void bus_hook(struct ppcemu_state *emu, uint32_t addr, unsigned int len, 
 	}
 }
 
+static void loadstore_hook(struct ppcemu_state *emu, uint32_t addr, unsigned int len, void *data, bool is_write) {
+	int i;
+
+	for (i = 0; i < NUM_WATCHPOINTS; i++) {
+		if (addr == watchpoints[i] && watchpointsActive[i]) { /* watchpoint hit */
+			printf("Hit watchpoint %d (0x%08x), %s", i, addr, is_write ? "writen with value: " : "read");
+			if (is_write && len == 1)
+				printf("0x%02x\r\n", *(uint8_t *)data);
+			else if (is_write && len == 2)
+				printf("0x%04x\r\n", ppcemu_be16_to_cpu(*(uint16_t *)data));
+			else if (is_write && len == 4)
+				printf("0x%08x\r\n", ppcemu_be32_to_cpu(*(uint32_t *)data));
+			else
+				puts("");
+
+			running = false;
+			debuggerReason = "watchpoint";
+			while (!running)
+				debugger(emu);
+
+			return;
+		}
+	}
+}
+
 static void ctrlcHandler(int sig) {
 	(void)sig;
 	running = false;
@@ -134,6 +163,34 @@ static int dbgDelBP(uint32_t addr) {
 	return -1;
 }
 
+static int dbgAddWP(uint32_t addr) {
+	int i;
+
+	for (i = 0; i < NUM_WATCHPOINTS; i++) {
+		if (!watchpointsActive[i]) {
+			watchpoints[i] = addr;
+			watchpointsActive[i] = true;
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+static int dbgDelWP(uint32_t addr) {
+	int i;
+
+	for (i = 0; i < NUM_WATCHPOINTS; i++) {
+		if (watchpointsActive[i] && watchpoints[i] == addr) {
+			watchpoints[i] = 0;
+			watchpointsActive[i] = false;
+			return i;
+		}
+	}
+
+	return -1;
+}
+
 
 static void dbgHelp(void) {
 	puts(
@@ -158,6 +215,12 @@ Commands:\r\n\
 	bd [addr]		Delete the breakpoint at [addr].\r\n\
 \r\n\
 	bl			List created breakpoints.\r\n\
+\r\n\
+	w, watch [addr]		Set a watchpoint at [addr].\r\n\
+\r\n\
+	wd [addr]		Delete the watchpoint at [addr].\r\n\
+\r\n\
+	wl			List created watchpoints.\r\n\
 \r\n\
 	r, run			Start the emulator from Hard Reset and\r\n\
 				run indefinitely, or until a breakpoint\r\n\
@@ -481,6 +544,49 @@ static void debugger(struct ppcemu_state *emu) {
 				printf("Deleted breakpoint %d @ PC=0x%08x\r\n", idx, addr);
 		}
 	}
+	else if (!strcmp(cmd, "w") || !strcmp(cmd, "watch")) {
+		arg = strtok(NULL, " ");
+		if (!arg) {
+			puts("Missing address");
+			goto out;
+		}
+
+		addr = strtoul(arg, &tmp, 16);
+		if (tmp == arg || addr > 0xffffffff)
+			printf("Invalid watchpoint address: %s\r\n", arg);
+		else {
+			idx = dbgAddWP(addr);
+			if (idx == -1)
+				puts("Could not add watchpoint");
+			else
+				printf("Added watchpoint %d for PC=0x%08x\r\n", idx, addr);
+		}
+
+	}
+	else if (!strcmp(cmd, "wl")) {
+		for (i = 0; i < NUM_WATCHPOINTS; i++) {
+			if (watchpointsActive[i])
+				printf("Watchpoint %d: 0x%08x\r\n", i, watchpoints[i]);
+		}
+	}
+	else if (!strcmp(cmd, "wd")) {
+		arg = strtok(NULL, " ");
+		if (!arg) {
+			puts("Missing address");
+			goto out;
+		}
+
+		addr = strtoul(arg, &tmp, 16);
+		if (tmp == arg || addr > 0xffffffff)
+			printf("Invalid watchpoint address: %s\r\n", arg);
+		else {
+			idx = dbgDelWP(addr);
+			if (idx == -1)
+				printf("There is no watchpoint at PC=0x%08x\r\n", addr);
+			else
+				printf("Deleted watchpoint %d @ PC=0x%08x\r\n", idx, addr);
+		}
+	}
 	else if (!strcmp(cmd, "log")) {
 		arg = strtok(NULL, " ");
 		if (!arg) {
@@ -619,6 +725,9 @@ int main(void) {
 	memset(breakpointsActive, 0, sizeof(breakpointsActive));
 	memset(dbgOldGPRs, 0, sizeof(dbgOldGPRs));
 	dbgOldPC = dbgOldLR = dbgOldCTR = dbgOldCR = dbgOldXER = dbgOldMSR = 0;
+
+	/* register load/store hook for watchpoints */
+	ppcemu_set_loadstore_hook(emu, loadstore_hook);
 
 	while (true) {
 		if (IPC_Err) {
