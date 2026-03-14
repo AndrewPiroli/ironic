@@ -16,6 +16,23 @@ pub trait MmioDevice {
     fn write(&mut self, off: usize, val: Self::Width) -> anyhow::Result<Option<BusTask>>;
 }
 
+/// Interface used by the bus to perform some access on an I/O device that has multiple widths.
+pub trait MmioDeviceMultiWidth {
+    /// Handle a 32-bit read, returning some result.
+    fn read32(&self, off: usize) -> anyhow::Result<BusPacket>;
+    /// Handle a 16-bit read, returning some result.
+    fn read16(&self, off: usize) -> anyhow::Result<BusPacket>;
+    /// Handle a 8-bit read, returning some result.
+    fn read8(&self, off: usize) -> anyhow::Result<BusPacket>;
+
+    /// Handle a 32-bit write, optionally returning a task for the bus.
+    fn write32(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>>;
+    /// Handle a 16-bit write, optionally returning a task for the bus.
+    fn write16(&mut self, off: usize, val: u16) -> anyhow::Result<Option<BusTask>>;
+    /// Handle a 8-bit write, optionally returning a task for the bus.
+    fn write8(&mut self, off: usize, val: u8) -> anyhow::Result<Option<BusTask>>;
+}
+
 impl Bus {
     /// Dispatch a physical read access to some memory-mapped I/O device.
     pub fn do_mmio_read(&self, dev: IoDevice, off: usize, width: BusWidth) -> anyhow::Result<BusPacket> {
@@ -32,8 +49,15 @@ impl Bus {
 
             (BusWidth::W, Hlwd)  => self.hlwd.read(off),
             (BusWidth::W, Ahb)   => self.hlwd.ahb.read(off),
+            (BusWidth::W, Vi)    => self.hlwd.vi.read32(off),
+            (BusWidth::W, Pi)    => self.hlwd.pi.read(off),
+            (BusWidth::W, Dsp)   => self.hlwd.dsp.read32(off),
             (BusWidth::W, Di)    => self.hlwd.di.read(off),
             (BusWidth::W, Exi)   => self.hlwd.exi.read(off),
+            (BusWidth::W, Si)    => self.hlwd.si.read(off),
+            (BusWidth::W, Ai)    => self.hlwd.ai.read(off),
+            (BusWidth::H, Vi)    => self.hlwd.vi.read16(off),
+            (BusWidth::H, Dsp)   => self.hlwd.dsp.read16(off),
             (BusWidth::H, Mi)    => self.hlwd.mi.read(off),
             (BusWidth::H, Ddr)   => self.hlwd.ddr.read(off),
             _ => { bail!("Unsupported read {width:?} for {dev:?} at {off:x}"); },
@@ -56,9 +80,16 @@ impl Bus {
 
 
             (Word(val), Hlwd)  => self.hlwd.write(off, val),
+            (Word(val), Vi)    => self.hlwd.vi.write32(off, val),
+            (Word(val), Pi)    => self.hlwd.pi.write(off, val),
+            (Word(val), Dsp)   => self.hlwd.dsp.write32(off, val),
+            (Word(val), Si)    => self.hlwd.si.write(off, val),
             (Word(val), Ahb)   => self.hlwd.ahb.write(off, val),
             (Word(val), Exi)   => self.hlwd.exi.write(off, val),
             (Word(val), Di)    => self.hlwd.di.write(off, val),
+            (Word(val), Ai)    => self.hlwd.ai.write(off, val),
+            (Half(val), Vi)    => self.hlwd.vi.write16(off, val),
+            (Half(val), Dsp)   => self.hlwd.dsp.write16(off, val),
             (Half(val), Mi)    => self.hlwd.mi.write(off, val),
             (Half(val), Ddr)   => self.hlwd.ddr.write(off, val),
 
