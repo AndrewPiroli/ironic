@@ -20,6 +20,7 @@ static bool previouslyRunning = false;
 static bool running = false;
 static bool started = false;
 static bool singleStep = false;
+static bool gotIRQ = false;
 static uint32_t breakpoints[NUM_BREAKPOINTS];
 static bool breakpointsActive[NUM_BREAKPOINTS];
 static uint32_t watchpoints[NUM_WATCHPOINTS];
@@ -367,7 +368,7 @@ static void debugger(struct ppcemu_state *emu) {
 
 	printf("(ppcdbg) ");
 	ret = getline(&cmd, &cmdSize, stdin);
-	
+
 	if (ret == -1)
 		cleanup(1);
 
@@ -680,6 +681,11 @@ static void emuStep(struct ppcemu_state *emu) {
 	uint32_t pc;
 	int i;
 
+	if (gotIRQ) {
+		ppcemu_external_interrupt(emu);
+		gotIRQ = false;
+	}
+
 	/* check for breakpoints */
 	if (!continuePastBP) {
 		pc = ppcemu_get_pc(emu);
@@ -702,6 +708,10 @@ static void emuStep(struct ppcemu_state *emu) {
 	ppcemu_step(emu);
 }
 
+static void irqHandler(void) {
+	gotIRQ = true;
+}
+
 int main(void) {
 	struct ppcemu_state *emu;
 	bool tmpRunning;
@@ -714,6 +724,12 @@ int main(void) {
 
 	if (IPC_Init()) {
 		puts("cronic init failed");
+		return 1;
+	}
+
+	IPC_EnableFlipperIrqs(irqHandler);
+	if (IPC_Err) {
+		puts("Failed to enable Flipper IRQ forwarding");
 		return 1;
 	}
 
