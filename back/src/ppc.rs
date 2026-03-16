@@ -1,7 +1,7 @@
 //! Backend for handling PowerPC HLE.
 //!
 //! NOTE: The socket is blocking right now, but I guess ultimately we don't
-//! want that. 
+//! want that.
 
 use ironic_core::bus::*;
 use ironic_core::dev::hlwd::irq::*;
@@ -26,11 +26,11 @@ use uds_windows::{UnixStream, UnixListener};
 /// A type of command sent over the socket.
 #[derive(Debug)]
 #[repr(u32)]
-pub enum Command { 
-    HostWrite, 
-    HostRead, 
-    Message, 
-    Ack, 
+pub enum Command {
+    HostWrite,
+    HostRead,
+    Message,
+    Ack,
     MessageNoReturn,
     Shutdown,
     PPCRead8,
@@ -39,6 +39,9 @@ pub enum Command {
     PPCWrite8,
     PPCWrite16,
     PPCWrite32,
+    EnableFlipperIrqForwarding,
+    /// Sent server->client when a Flipper IRQ fires.
+    FlipperIrq,
     Unimpl
 }
 impl Command {
@@ -55,6 +58,8 @@ impl Command {
             9  => Self::PPCWrite8,
             10 => Self::PPCWrite16,
             11 => Self::PPCWrite32,
+            12 => Self::EnableFlipperIrqForwarding,
+            13 => Self::FlipperIrq,
             255 => Self::Shutdown,
             _  => Self::Unimpl,
         }
@@ -90,7 +95,9 @@ pub struct PpcBackend {
     /// Output buffer for the socket.
     pub obuf: [u8; BUF_LEN],
     /// Counter to prevent infinite retry on the socket
-    socket_errors: u8
+    socket_errors: u8,
+    /// Should we be appending an IRQ status byte to every response?
+    forward_irqs: bool
 }
 impl PpcBackend {
     pub fn new(bus: Arc<RwLock<Bus>>) -> Self {
@@ -99,6 +106,7 @@ impl PpcBackend {
             ibuf: [0; BUF_LEN],
             obuf: [0; BUF_LEN],
             socket_errors: 0,
+            forward_irqs: false
         }
     }
 
@@ -145,6 +153,11 @@ impl PpcBackend {
             loop {
                 let res = self.wait_for_request(&mut client);
                 if let Some(req) = res {
+                    // Remember whether forwarding was already on before this
+                    // command, so the EnableFlipperIrqForwarding response
+                    // itself doesn't get the extra byte.
+                    let was_forwarding = self.forward_irqs;
+
                     match req.cmd {
                         Command::Ack => self.handle_ack(req)?,
                         Command::HostRead => self.handle_read(&mut client, req)?,
@@ -167,7 +180,18 @@ impl PpcBackend {
                             let _ = client.write(b"kk")?;
                             break;
                         }
+                        Command::EnableFlipperIrqForwarding => {
+                            let _ = client.write("OK".as_bytes())?; // maybe FIXME: is it ok to ignore the # of bytes written here?
+                            self.forward_irqs = true;
+                        }
+                        Command::FlipperIrq => break, // server->client only
                         Command::Unimpl => break,
+                    }
+
+                    // Piggyback the IRQ status on every response so the
+                    // client never needs to poll/peek (zero extra syscalls).
+                    if was_forwarding {
+                        self.append_irq_flag(&mut client);
                     }
                 }
             }
@@ -242,6 +266,13 @@ impl PpcBackend {
                 thread::sleep(std::time::Duration::from_millis(10));
             }
         }
+    }
+
+    /// Append a 1-byte IRQ status flag after the response.
+    /// The client reads this extra byte as part of the same recv.
+    fn append_irq_flag(&self, client: &mut UnixStream) {
+        let flag: u8 = if self.bus.read().hlwd.pi.irq_output { 1 } else { 0 };
+        let _ = client.write(&[flag]);
     }
 
     /// Block until we receive some command message from a client.
@@ -408,4 +439,3 @@ impl Backend for PpcBackend {
         }
     }
 }
-
