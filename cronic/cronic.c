@@ -21,7 +21,6 @@ static ipc_msg_t msg;
 
 /* Flipper IRQ forwarding state */
 static bool irq_forwarding = false;
-static bool last_irq_state = false;
 static IPC_IrqCallback irq_callback = NULL;
 
 /*
@@ -58,11 +57,9 @@ static int ipc_recv_response(void *buf, int len) {
 	if (ipc_read_exact(&flag, 1) < 0)
 		return -1;
 
-	/*printf("flag 1: %u\r\n", flag);*/
-	if (flag && !last_irq_state && irq_callback)
+	if (flag && irq_callback)
 		irq_callback();
 
-	last_irq_state = flag;
 	return 0;
 }
 
@@ -80,13 +77,8 @@ static int ipc_recv_ok(void) {
 	if (buf[0] != 'O' || buf[1] != 'K')
 		return -1;
 
-	if (irq_forwarding && irq_callback) {
-		/*printf("flag 2: %u\r\n", buf[2]);*/
-		if (buf[2] && !last_irq_state)
-			irq_callback();
-
-		last_irq_state = buf[2];
-	}
+	if (irq_forwarding && buf[2] && irq_callback)
+		irq_callback();
 	return 0;
 }
 
