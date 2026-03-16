@@ -9,7 +9,7 @@ from struct import unpack
 from dataclasses import dataclass
 from typing import Iterable, List, Tuple, Any
 
-from pyronic.client import IPCClient
+from pyronic.client import IPCClient, MemHandle
 from pyronic.ios import IPCMsg
 
 READ_PATH     = "nand_flash.bin"
@@ -109,20 +109,20 @@ def human(n):
     return f"{n:.1f}TiB"
 
 
-def ipc_read(ipc, fd, chunk_size: int):
+def ipc_read(ipc, fd, h: MemHandle):
     """Send one IPC_READ, return (rc, raw_response_bytes)."""
-    h   = ipc.alloc_raw(chunk_size)
-    res = ipc.guest_ipc(IPCMsg(ipc.IPC_READ, fd=fd, args=[h.paddr, chunk_size, 0, 0, 0]))
+    res = ipc.guest_ipc(IPCMsg(ipc.IPC_READ, fd=fd, args=[h.paddr, h.size, 0, 0, 0]))
     rb  = res.read()
     if len(rb) < 8:
         raise RuntimeError(f"IPC_READ response too short: {rb.hex()}")
     rc = unpack(">i", rb[4:8])[0]
-    return rc, h, rb
+    return rc, rb
 
 
-def ipc_write(ipc, fd, chunk):
+def ipc_write(ipc, fd, chunk, h: MemHandle):
     """Send one IPC_WRITE, raise on error or short write."""
-    h = ipc.alloc_raw(len(chunk))
+    if h.size != len(chunk):
+        raise RuntimeError("h.len() != len(chunk)")
     ipc.guest_write(h.paddr, chunk)
     res = ipc.guest_ipc(IPCMsg(ipc.IPC_WRITE, fd=fd, args=[h.paddr, len(chunk), 0, 0, 0]))
     rb  = res.read()
@@ -140,9 +140,13 @@ def read_entire_nand(ipc, fd, out_path, pages_per_block: int, chunk_size: int) -
     total = 0
     bad_entries: List[BadMapEntry] = []
     print(f"Reading NAND to {out_path}...")
+    h = ipc.alloc_raw(chunk_size)
+    zeroed = bytearray(chunk_size)
     with open(out_path, "wb") as f:
         while True:
-            rc, h, _ = ipc_read(ipc, fd, chunk_size)
+            # memset
+            ipc.guest_write(h.paddr, zeroed)
+            rc, _ = ipc_read(ipc, fd, h)
 
             if rc == -4:
                 print(f"  -4 (EINVAL) at 0x{total:08x} — end of flash, stopping")
@@ -196,12 +200,13 @@ def write_entire_nand(ipc, fd, in_path, chunk_size: int):
     size  = os.path.getsize(in_path)
     sent  = 0
     print(f"Writing {human(size)} from {in_path}...")
+    h = ipc.alloc_raw(chunk_size)
     with open(in_path, "rb") as f:
         while chunk := f.read(chunk_size):
             # Enforce exact chunk_size writes; throw if last chunk is short
             if len(chunk) != chunk_size:
                 raise RuntimeError(f"Unexpected chunk size: {len(chunk)} != {chunk_size}")
-            sent += ipc_write(ipc, fd, chunk)
+            sent += ipc_write(ipc, fd, chunk, h)
             print(f"  {human(sent)}/{human(size)}", end="\r", flush=True)
     print(f"\nDone: {human(sent)} written.")
     return sent
@@ -377,7 +382,7 @@ def main():
         # Step 1: read & compare dump against reference NAND binary
         first_read = read_entire_nand(ipc, fd, READ_PATH, stats.pages_per_block, stats.chunk_size)
         write_bad_map_file(BAD_MAP_PATH, first_read.bad_entries)
-        compare_files(READ_PATH, REFERENCE_PATH, stats, first_read.bad_entries)
+        compare_files(READ_PATH, REFERENCE_PATH, stats, read_bad_map_file(BAD_MAP_PATH))
 
         # Step 2: write read dump back to flash
         print("\n[Step 2] Writing back to /dev/flash...")
@@ -391,8 +396,8 @@ def main():
         # Step 3: re-read and compare against the original dump
         print("\n[Step 3] Re-reading flash for verification...")
         fd = reopen(ipc, fd, "verify reopen")
-        #read = read_entire_nand(ipc, fd, WRITTEN_PATH, stats.pages_per_block, stats.chunk_size)
-        #write_bad_map_file(BAD_MAP_WRITTEN_PATH, read.bad_entries)
+        read = read_entire_nand(ipc, fd, WRITTEN_PATH, stats.pages_per_block, stats.chunk_size)
+        write_bad_map_file(BAD_MAP_WRITTEN_PATH, read.bad_entries)
 
         entries = read_bad_map_file(BAD_MAP_PATH)
         compare_files(WRITTEN_PATH, READ_PATH, stats, entries)
