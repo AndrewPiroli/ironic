@@ -82,14 +82,22 @@ impl IrqInterface {
 
     pub fn read_handler(&self, off: usize) -> anyhow::Result<u32> {
         Ok(match off {
+            0x00 => self.ppc_irq_status.0,
+            0x04 => self.ppc_irq_enable.0,
             0x08 => self.arm_irq_status.0,
             0x0c => self.arm_irq_enable.0,
+            0x10 => self.arm_fiq_enable.0,
             _ => { bail!("Unhandled read on HLWD IRQ interface {off:02x}"); },
         })
     }
 
     pub fn write_handler(&mut self, off: usize, val: u32) ->anyhow:: Result<()> {
         match off {
+            0x00 => {
+                debug!(target: "IRQ", "PPC status bits {:08x} cleared", val);
+                self.ppc_irq_status.0 &= !val;
+            },
+
             0x04 => {
                 self.ppc_irq_enable.0 = val;
                 debug!(target: "IRQ", "PPC enable={val:08x}");

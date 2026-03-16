@@ -38,6 +38,9 @@ pub enum Command {
     PPCWrite8,
     PPCWrite16,
     PPCWrite32,
+    EnableFlipperIrqForwarding,
+    /// Sent server->client when a Flipper IRQ fires.
+    FlipperIrq,
     PatchRange,
     DisableProtections,
     Shutdown,
@@ -57,6 +60,8 @@ impl Command {
             9 => Self::PPCWrite8,
             10 => Self::PPCWrite16,
             11 => Self::PPCWrite32,
+            12 => Self::EnableFlipperIrqForwarding,
+            13 => Self::FlipperIrq,
             14 => Self::PatchRange,
             15 => Self::DisableProtections,
             255 => Self::Shutdown,
@@ -136,7 +141,9 @@ pub struct PpcBackend {
     /// Output buffer for the socket.
     pub obuf: [u8; BUF_LEN],
     /// Counter to prevent infinite retry on the socket
-    socket_errors: u8
+    socket_errors: u8,
+    /// Should we be appending an IRQ status byte to every response?
+    forward_irqs: bool
 }
 impl PpcBackend {
     pub fn new(bus: Arc<RwLock<Bus>>) -> Self {
@@ -145,6 +152,7 @@ impl PpcBackend {
             ibuf: [0; BUF_LEN],
             obuf: [0; BUF_LEN],
             socket_errors: 0,
+            forward_irqs: false
         }
     }
 
@@ -195,6 +203,11 @@ impl PpcBackend {
             self.socket_errors = 0;
 
             while let Some(req) = self.wait_for_request(&mut client)? {
+                // Remember whether forwarding was already on before this
+                // command, so the EnableFlipperIrqForwarding response
+                // itself doesn't get the extra byte.
+                let was_forwarding = self.forward_irqs;
+
                 match req.cmd {
                     Command::Ack => self.handle_ack(req)?,
                     Command::HostRead => self.handle_read(&mut client, req)?,
@@ -227,10 +240,20 @@ impl PpcBackend {
                         client.write_all(b"kk")?;
                         break;
                     }
+                    Command::EnableFlipperIrqForwarding => {
+                        client.write_all("OK".as_bytes())?;
+                        self.forward_irqs = true;
+                    }
+                    Command::FlipperIrq => break, // server->client only
                     Command::Unimpl => {
                         error!(target: "PPC", "recieved unimplemented command");
                         break;
                     },
+                }
+                // Piggyback the IRQ status on every response so the
+                // client never needs to poll/peek (zero extra syscalls).
+                if was_forwarding {
+                    self.append_irq_flag(&mut client)?;
                 }
                 debug!(target:"PPC", "waiting for command");
             }
@@ -305,6 +328,18 @@ impl PpcBackend {
                 thread::sleep(std::time::Duration::from_millis(10));
             }
         }
+    }
+
+    /// Append a 1-byte IRQ latch flag after the response.
+    /// The client reads this extra byte as part of the same recv.
+    /// Clears the latch so each assertion only produces one notification.
+    fn append_irq_flag(&self, client: &mut UnixStream) -> anyhow::Result<()> {
+        let mut bus = self.bus.write();
+        let flag: u8 = if bus.hlwd.pi.irq_latch { 1 } else { 0 };
+        bus.hlwd.pi.irq_latch = false;
+        drop(bus);
+        client.write_all(&[flag])?;
+        Ok(())
     }
 
     /// Block until we receive some command message from a client.
@@ -520,4 +555,3 @@ impl Backend for PpcBackend {
         }
     }
 }
-
