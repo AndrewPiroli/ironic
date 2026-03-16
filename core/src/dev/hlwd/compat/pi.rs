@@ -80,25 +80,32 @@ pub struct ProcessorInterface {
     pub unk_28: u32,
     pub unk_2c: u32,
 
-    /// at least one unmasked IRQ is pending (INTSR & INTMR != 0)
+    /// Set when assert() fires a new interrupt; cleared after the IPC
+    /// server reads it for the piggybacked IRQ byte.  This is a latch,
+    /// not a level — every unmasked assert() produces a new interrupt
+    /// regardless of whether INTSR was already set.
+    pub irq_latch: bool,
+
+    /// At least one unmasked IRQ is pending (INTSR & INTMR != 0).
+    /// This is the steady-state level for the output line, but the
+    /// latch above is what actually triggers new interrupts.
     pub irq_output: bool
 }
 
 impl ProcessorInterface {
+    /// Assert a Flipper IRQ.  Always fires a new interrupt to Broadway
+    /// as long as the IRQ is unmasked in INTMR — even if the INTSR bit
+    /// is already set (i.e. not yet acknowledged by software).
     pub fn assert(&mut self, irq: FlipperIrq) {
-        // FIXME: YAGCD says that INTMR is purely software-based and it doesn't actually gate
-        // interrupts at a hardware level, however testing this on an actual Wii it appears to
-        // indeed act as a hardware gate - I didn't get Hollywood GPIO interrupts after
-        // clearing INTMR bit 14.  Maybe needs more investigation?
-        //     - Techflash
-        if self.intmr.is_set(irq) && !self.intsr.is_set(irq) {
+        if self.intmr.is_set(irq) {
             info!(target:"PI", "Asserting PI IRQ {:08x}", irq as u32);
             self.intsr.set(irq);
+            self.irq_latch = true;
             self.update_irq_lines();
         }
     }
 
-    /// Recalculate irq_output after a register write
+    /// Recalculate irq_output after a register write.
     fn update_irq_lines(&mut self) {
         // Ignore Reset Switch State
         self.irq_output = ((self.intsr.0 & !0x0001_0000) & self.intmr.0) != 0;

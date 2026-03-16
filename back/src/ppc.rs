@@ -268,10 +268,14 @@ impl PpcBackend {
         }
     }
 
-    /// Append a 1-byte IRQ status flag after the response.
+    /// Append a 1-byte IRQ latch flag after the response.
     /// The client reads this extra byte as part of the same recv.
+    /// Clears the latch so each assertion only produces one notification.
     fn append_irq_flag(&self, client: &mut UnixStream) {
-        let flag: u8 = if self.bus.read().hlwd.pi.irq_output { 1 } else { 0 };
+        let mut bus = self.bus.write();
+        let flag: u8 = if bus.hlwd.pi.irq_latch { 1 } else { 0 };
+        bus.hlwd.pi.irq_latch = false;
+        drop(bus);
         let _ = client.write(&[flag]);
     }
 
