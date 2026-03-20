@@ -43,8 +43,8 @@ static inline uint16_t __cronic_swap16(uint16_t in) {
 #else
 static inline uint32_t __cronic_swap32(uint32_t in) {
 	return (uint32_t)(
-		(__cronic_swap16((uint16_t)in) << 16) |
-		(__cronic_swap16((uint16_t)(in >> 16)))
+		((uint32_t)__cronic_swap16((uint16_t)in) << 16) |
+		((uint32_t)__cronic_swap16((uint16_t)(in >> 16)))
 	);
 }
 #endif
@@ -53,10 +53,10 @@ static inline uint32_t __cronic_swap32(uint32_t in) {
 #  define __cronic_swap64 __builtin_bswap64
 #  undef NO_CUSTOM_SWAP64
 #else
-static inline uint64_t __cronic_swap32(uint64_t in) {
+static inline uint64_t __cronic_swap64(uint64_t in) {
 	return (uint64_t)(
-		(__cronic_swap32((uint32_t)in) << 32) |
-		(__cronic_swap32((uint32_t)(in >> 32)))
+		((uint64_t)__cronic_swap32((uint32_t)in) << 32) |
+		((uint64_t)__cronic_swap32((uint32_t)(in >> 32)))
 	);
 }
 #endif
