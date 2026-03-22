@@ -3,19 +3,13 @@ pub(crate) mod card;
 
 use anyhow::anyhow;
 use anyhow::bail;
-use log::debug;
-use log::error;
-use log::log_enabled;
-use log::trace;
+use log::{trace, debug, warn, error};
 
 use crate::bus::prim::*;
 use crate::bus::mmio::*;
 use crate::bus::task::*;
 use crate::bus::Bus;
 use card::*;
-
-/// Changing this to false will disable DMA support
-const SDHC_ENABLE_DMA: bool = true;
 
 #[derive(Debug)]
 pub enum SDHCTask {
@@ -59,7 +53,11 @@ enum SDRegisters {
 }
 
 impl SDRegisters {
-    // writes are always 32 bit, but some registers are smaller than that, so we need to test old and new
+    /// Writes are always 32 bit, but some registers are smaller than that
+    /// So we need to shift and mask the old value with the new value to determine which registers are affected
+    ///
+    /// Returns Vec as up to 4 8 bit registers could be updated in a single shot, but this is unlikely to happen in practice
+    /// Most Host Drivers only write to a single register at a time.
     fn get_affected_registers(off: usize, old: u32, new: u32) -> Vec<SDRegisters> {
         let mut ret = Vec::with_capacity(4);
         let mut shift = 0u32;
@@ -176,7 +174,7 @@ impl SDRegisters {
             SDRegisters::HostControllerVersion => 2,
         }
     }
-    // These registers have RW1C bits or additional logic that must run on any write, even if the register is ultimiately unchanged
+    /// These registers have RW1C bits or additional logic that must run on any write, even if the register is ultimiately unchanged
     fn must_always_handle_writes(&self) -> bool {
         matches!(self,
             SDRegisters::BufferDataPort |
@@ -204,10 +202,7 @@ impl SDRegisters {
         match self {
             SDRegisters::Command => {
                 let x = card::Command::from(new);
-                if log_enabled!(target: "SDHC", log::Level::Debug) {
-                    dbg!(&x);
-                }
-                // let cmd = x.index;
+                debug!(target: "SDHC", "Command {:?}", &x);
                 if let Some(response) = iface.card.issue(x, iface.raw_read(SDRegisters::Argument.base_offset())){
                     self.apply_response(iface, response);
                 }
@@ -229,10 +224,6 @@ impl SDRegisters {
                         if new & 1 == 1 {
                             let use_dma = iface.raw_read(SDRegisters::TxMode.base_offset()) & 0x1 == 1;
                             if use_dma {
-                                if !SDHC_ENABLE_DMA {
-                                    error!(target:"SDHC", "Software Attempted to use DMA, which is disabled.");
-                                    return None;
-                                }
                                 iface.card.tx_status = CardTXStatus::DMAReadInProgress;
                                 return Some(SDHCTask::DoDMARead);
                             }
@@ -246,10 +237,6 @@ impl SDRegisters {
                         if new & 1 == 1 {
                             let use_dma = iface.raw_read(SDRegisters::TxMode.base_offset()) & 0x1 == 1;
                             if use_dma {
-                                if !SDHC_ENABLE_DMA {
-                                    error!(target:"SDHC", "Software Attempted to use DMA, which is disabled.");
-                                    return None;
-                                }
                                 iface.card.tx_status = CardTXStatus::DMAWriteInProgress;
                                 return Some(SDHCTask::DoDMAWrite);
                             }
@@ -298,10 +285,17 @@ impl SDRegisters {
                 iface.setreg(*self, new);
             },
             SDRegisters::SoftwareReset => {
-                if new & 1 == 1 {
-                    iface.reset();
+                if new & 0b001 != 0 {
+                    iface.reset_all();
                 }
-                else { unimplemented!("DAT and CMD line resets"); }
+                else {
+                    if new & 0b010 != 0 {
+                        iface.reset_cmd_line();
+                    }
+                    if new & 0b100 != 0 {
+                        iface.reset_dat_line();
+                    }
+                }
             },
             SDRegisters::BufferDataPort => {
                 match iface.card.tx_status {
@@ -338,6 +332,7 @@ impl SDRegisters {
                     }
                 }
             }
+            SDRegisters::HostControl |
             SDRegisters::TxMode |
             SDRegisters::BlockCount |
             SDRegisters::BlockSize |
@@ -350,7 +345,7 @@ impl SDRegisters {
                 iface.setreg(*self, new);
             },
             other => {
-                error!(target: "SDHC", "Unhandled write to register: {other:?}");
+                warn!(target: "SDHC", "Unhandled write to register: {other:?}");
                 iface.setreg(*other, new);
             }
         }
@@ -378,7 +373,6 @@ pub struct SDInterface {
     insert_raised: bool,
     first_ack: bool,
     card: Card,
-    card_available: bool,
     tx_status: CardTXStatus,
 }
 
@@ -455,16 +449,67 @@ impl SDInterface {
             false
         }
     }
-    fn reset(&mut self) {
-        debug!(target: "SDHC", "SD interface software reset");
+    fn reset_all(&mut self) {
+        debug!(target: "SDHC", "SD interface software reset for ALL");
         let mut new = Self::default();
         let card_detection_circuit_status = self.raw_read(SDRegisters::PresentState.base_offset()) & 0x70000;
         new.raw_write(SDRegisters::PresentState.base_offset(), card_detection_circuit_status);
         new.insert_raised = self.insert_raised;
         *self = new;
     }
+    fn reset_cmd_line(&mut self) {
+        debug!(target: "SDHC", "SD interface software reset for CMD line");
+        // Clear the following bits in Present State Register
+        // - Command Inhibit (CMD) bit 0
+        let ps = self.raw_read(SDRegisters::PresentState.base_offset());
+        const PS_CMD_RESET: u32 = 0x1;
+        self.setreg(SDRegisters::PresentState, ps & !PS_CMD_RESET);
+        // Clear the following bits in Normal Interrupt Status Register
+        // - Command Complete bit 0
+        let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset()) & 0x0000_ffff;
+        const NISR_CMD_RESET: u32 = 0x1;
+        self.setreg(SDRegisters::NormalIntStatus, nisr & !NISR_CMD_RESET);
+        // In case any of these got stashed, clear from pending interrupts as well
+        self.pending_interrupt_flags &= !NISR_CMD_RESET;
+    }
+    fn reset_dat_line(&mut self) {
+        debug!(target: "SDHC", "SD interface software reset for DAT line");
+        // Clear & init Buffer Data Port
+        self.setreg(SDRegisters::BufferDataPort, 0);
+        // Clear the following bits in Present State Register
+        // - Buffer Read Enable     bit 11
+        // - Buffer Write Enable    bit 10
+        // - Read Transfer Active   bit  9
+        // - Write Transfer Active  bit  8
+        // - DAT Line Active        bit  2
+        // - Command Inhibit (DAT)  bit  1
+        let ps = self.raw_read(SDRegisters::PresentState.base_offset());
+        const PS_DAT_RESET: u32 = 0xF06;
+        self.setreg(SDRegisters::PresentState, ps & !PS_DAT_RESET);
+        // Clear the following bits in Block Gap Control Register
+        // - Continue Request          bit 1
+        // - Stop at Block Gap Request bit 0
+        let bgcr = (self.raw_read(SDRegisters::BlockGapControl.base_offset() & 0xffff_fffc) & 0x00ff_0000) >> 16;
+        const BG_DAT_RESET: u32 = 0x3;
+        self.setreg(SDRegisters::BlockGapControl, bgcr & !BG_DAT_RESET);
+        // Clear the following bits in Normal Interrupt Status Register
+        // - Buffer Read Ready  bit 5
+        // - Buffer Write Ready bit 4
+        // - DMA Interrupt      bit 3
+        // - Block Gap Event    bit 2
+        // - Transfer complete  bit 1
+        let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset()) & 0x0000_ffff;
+        const NISR_DAT_RESET: u32 = 0x3E;
+        self.setreg(SDRegisters::NormalIntStatus, nisr & !NISR_DAT_RESET);
+        // In case any of these got stashed, clear from pending interrupts as well
+        self.pending_interrupt_flags &= !NISR_DAT_RESET;
+        // Spec tells us to "Reset DMA circuit" as well.
+        // Not really sure what that means *exactly*, but we will clear any transactions in progress with the card
+        // This may cause errors to be logged to the console, but shouldn't be a big deal otherwise.
+        self.card.tx_status = CardTXStatus::None;
+    }
     fn insert_card(&mut self) -> bool {
-        if self.insert_raised || !self.card_available {
+        if self.insert_raised || !self.card.available {
             return false;
         }
         let current_state = self.raw_read(SDRegisters::PresentState.base_offset());
@@ -505,7 +550,7 @@ impl SDInterface {
         return self.raise_int(BUFFER_READ_READY_MASK);
     }
     fn buffer_ready_write(&mut self) -> bool {
-        let blocks_remaining = self.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16; // p83
+        let blocks_remaining = self.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
         if blocks_remaining > 0 {
             // tell card it's rw_stop
             self.card.rw_stop = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) + 512;
@@ -601,19 +646,19 @@ impl SDInterface {
 
 impl Default for SDInterface {
     fn default() -> Self {
-        let (card, card_available) = Card::try_new();
-        let mut new = Self { register_file: [0;256], pending_interrupt_flags: 0, insert_raised: false, first_ack: false, card, card_available, tx_status: CardTXStatus::None };
+        let card = Card::new();
+        let mut new = Self { register_file: [0;256], pending_interrupt_flags: 0, insert_raised: false, first_ack: false, card, tx_status: CardTXStatus::None };
         // Fill HWInit registers
         // Capabilities Register
         const VOLTAGE_SUPPORT_3_3V: u32 = 1 << 24;
         const SD_BASE_CLK_10MHZ: u32 = 10 << 8;
-        const DMA_SUPPORT: u32 = (SDHC_ENABLE_DMA as u32) << 22;
+        const DMA_SUPPORT: u32 = 1 << 22;
         new.raw_write(SDRegisters::Capabilities.base_offset(), VOLTAGE_SUPPORT_3_3V | SD_BASE_CLK_10MHZ | DMA_SUPPORT);
         // Maximum Current Capabilities Register
         const CURRENT_CAP_3_3V_MAX: u32 = 0xff;
         new.raw_write(SDRegisters::MaxCurrentCapabilities.base_offset(), CURRENT_CAP_3_3V_MAX);
         // End HWInit Registers
-        debug!(target: "SDHC", "init sdhc");
+        debug!(target: "SDHC", "SD Interface Initialized");
         new
     }
 }
@@ -636,7 +681,7 @@ impl MmioDevice for SDInterface {
                     {
                         let v = self.card.backing_mem.lock();
                         if v.data.len() < index+4 || index+4 > self.card.rw_stop {
-                            return Err(anyhow!("out of range! {index:?} {:?} {} ", v.data.len(), self.card.rw_stop));
+                            return Err(anyhow!("SDHC read out of range! {index:?} data len: {:?} rw_stop: {} ", v.data.len(), self.card.rw_stop));
                         }
                         self.card.rw_index.store(index+4, std::sync::atomic::Ordering::Relaxed);
                         let ret: u32 = v.read(index).unwrap();
@@ -650,23 +695,21 @@ impl MmioDevice for SDInterface {
 
     fn write(&mut self, off: usize, val: Self::Width) -> anyhow::Result<Option<BusTask>> {
         debug!(target: "SDHC", "MMIO write: 0x{off:x} = 0x{val:x}");
-        // first read the current line to get the old
         let old = self.raw_read(off);
         let regs = SDRegisters::get_affected_registers(off, old, val);
-        debug!(target: "SDHC", "{:?}", &regs);
-        //fixme: multiple tasks?
-        let mut tasks = Vec::new();
+        debug!(target: "SDHC", "affected registers: {:?}", &regs);
+        let mut send_task = None;
         for reg in regs {
             if let Some(task) = reg.run_write_handler(self, old, val) {
-                tasks.push(task);
+                if send_task.is_none() {
+                    send_task = Some(BusTask::SDHC(task));
+                }
+                else {
+                    error!(target: "SDHC", "Multiple SDHC Tasks returned from a single write. This is not supported.");
+                }
             }
         }
-        if tasks.is_empty() {
-            Ok(None)
-        }
-        else {
-            Ok(Some(BusTask::SDHC(tasks.pop().unwrap())))
-        }
+        return Ok(send_task);
     }
 }
 
