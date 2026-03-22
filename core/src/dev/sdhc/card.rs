@@ -1,7 +1,31 @@
 use std::{num::NonZeroU16, sync::atomic::AtomicUsize};
-use log::{debug, error};
+use log::{debug, error, warn};
 
 use crate::mem::BigEndianMemory;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CardCapacity {
+    /// Standard Capacity SD Memory Card (up to and including 2 GB).
+    /// Uses byte addressing for memory access commands.
+    /// Uses CSD Version 1.0.
+    /// Does not respond to CMD8 (presents as a v1.x card).
+    StandardCapacity,
+    /// High Capacity SD Memory Card (more than 2 GB, up to 32 GB).
+    /// Uses block (512 byte) addressing for memory access commands.
+    /// Uses CSD Version 2.0.
+    /// Responds to CMD8.
+    HighCapacity,
+}
+impl CardCapacity {
+    fn from_bytes(len: usize) -> Self {
+        const TWO_GB: usize = 2 * 1024 * 1024 * 1024;
+        if len > TWO_GB {
+            CardCapacity::HighCapacity
+        } else {
+            CardCapacity::StandardCapacity
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// The Transaction State of the emulated SD card.
@@ -76,6 +100,7 @@ impl CommandType {
 use parking_lot::Mutex;
 #[derive(Debug)]
 pub(super) struct Card {
+    pub available: bool,
     pub state: CardState,
     pub backing_mem: Mutex<BigEndianMemory>,
     acmd: bool,
@@ -84,6 +109,8 @@ pub(super) struct Card {
     /// Relative Card Address. The Host Driver will help us assign one and then use this to select us as the Active card.
     rca: Option<NonZeroU16>,
     csd: CsdReg,
+    /// Whether this card is SDSC (<=2GB) or SDHC (>2GB).
+    pub capacity: CardCapacity,
     /// The Card is selected by the Host Driver
     selected: bool,
     /// Pointer into the Backing Mem to keep track of multi-block transfers
@@ -94,7 +121,7 @@ pub(super) struct Card {
 }
 
 impl Card {
-    pub(super) fn try_new() -> (Self, bool) {
+    pub(super) fn new() -> Self {
         const FILENAME: &str = "sd.img";
         let mut len = 0usize;
         let backing_mem: BigEndianMemory;
@@ -111,19 +138,23 @@ impl Card {
             card_inserted = false;
             backing_mem = BigEndianMemory::new(len, None, false).unwrap();
         }
-        (Self {
+        let capacity = CardCapacity::from_bytes(len);
+        debug!(target: "SDHC", "SD card image size: {} bytes, capacity type: {:?}", len, capacity);
+        Self {
+            available: card_inserted,
             state: Default::default(),
             backing_mem: Mutex::new(backing_mem),
             acmd: Default::default(),
-            ocr: Default::default(),
+            ocr: OcrReg::new(capacity),
             cid: Default::default(),
             rca: Default::default(),
-            csd: CsdReg::new_with_num_block(len / 512),
+            csd: CsdReg::new(len, capacity),
+            capacity,
             selected: Default::default(),
             rw_index: Default::default(),
             rw_stop: Default::default(),
             tx_status: Default::default()
-        }, card_inserted)
+        }
     }
 }
 
@@ -133,9 +164,7 @@ impl Card {
         let acmd = std::mem::replace(&mut self.acmd, false);
         match (acmd, cmd.index) {
             (false, 0) => { return Some(self.cmd0(argument)); },
-            (false, 8) => {
-                return Some(self.cmd8(argument));
-            },
+            (false, 8) => { return self.cmd8(argument); },
             (true, 41) => { return Some(self.acmd41(argument)); },
             (false, 2) => { return Some(self.cmd2(argument)); },
             (false, 3) => { return Some(self.cmd3(argument)); },
@@ -155,9 +184,15 @@ impl Card {
             },
         }
     }
-    fn cmd8(&mut self, argument: u32) -> Response {
-        // CMD8 echo back in response
-        Response::Regular(argument & 0xfff)
+    fn cmd8(&mut self, argument: u32) -> Option<Response> {
+        match self.capacity {
+            CardCapacity::HighCapacity => {
+                Some(Response::Regular(argument & 0xfff))
+            },
+            CardCapacity::StandardCapacity => {
+                None
+            },
+        }
     }
     fn cmd0(&mut self, _argument: u32) -> Response {
         self.state = CardState::Idle;
@@ -213,22 +248,33 @@ impl Card {
     fn cmd16(&self, argument: u32) -> Response {
         let mut response = (self.state.bits_for_card_status() as u32) << 9;
         if argument != 512 {
+            error!(target: "SDHC", "CMD16 with block len != 512 is not currently supported");
             response |= 1 << 29; // block len error
         }
         Response::Regular(response)
     }
+    /// SDHC: argument is a block address
+    /// SDSC: argument is already a byte address
+    fn argument_to_byte_offset(&self, argument: u32) -> usize {
+        match self.capacity {
+            CardCapacity::HighCapacity => argument as usize * 512,
+            CardCapacity::StandardCapacity => argument as usize,
+        }
+    }
     fn cmd18(&mut self, argument: u32) -> Response {
-        log::debug!(target: "SDHC", "Issued multi block transfer(R): {} bytes", argument * 512);
+        let byte_offset = self.argument_to_byte_offset(argument);
+        log::debug!(target: "SDHC", "Issued multi block transfer(R): byte offset {} (arg=0x{:x}, {:?})", byte_offset, argument, self.capacity);
         self.state = CardState::Data;
-        self.rw_index.store(argument as usize * 512 , std::sync::atomic::Ordering::Relaxed);
+        self.rw_index.store(byte_offset, std::sync::atomic::Ordering::Relaxed);
         let response = (self.state.bits_for_card_status() as u32) << 9;
         self.tx_status = CardTXStatus::MultiReadPending;
         Response::Regular(response)
     }
     fn cmd25(&mut self, argument: u32) -> Response {
-        log::debug!(target: "SDHC", "Issued multi block transfer(W): {} bytes", argument * 512);
+        let byte_offset = self.argument_to_byte_offset(argument);
+        log::debug!(target: "SDHC", "Issued multi block transfer(W): byte offset {} (arg=0x{:x}, {:?})", byte_offset, argument, self.capacity);
         self.state = CardState::Rcv;
-        self.rw_index.store(argument as usize * 512 , std::sync::atomic::Ordering::Relaxed);
+        self.rw_index.store(byte_offset, std::sync::atomic::Ordering::Relaxed);
         let response = (self.state.bits_for_card_status() as u32) << 9;
         self.tx_status = CardTXStatus::MultiWritePending;
         Response::Regular(response)
@@ -292,18 +338,21 @@ impl CardState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// Operation Condition Register of the emulated SD card.
+/// Mostly does not matter.
 struct OcrReg(u32);
 
-impl Default for OcrReg {
-    fn default() -> Self {
-        Self((1 << 31 /* powerup complete */) | (1 << 30 /* High capacity card */) | (1 << 20 /* 3.3v */))
+impl OcrReg {
+    fn new(capacity: CardCapacity) -> Self {
+        let ccs = match capacity {
+            CardCapacity::HighCapacity => 1 << 30, // CCS = 1: High Capacity
+            CardCapacity::StandardCapacity => 0,    // CCS = 0: Standard Capacity
+        };
+        Self((1 << 31 /* powerup complete */) | ccs | (1 << 20 /* 3.3v */))
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-/// Operation Condition Register of the emulated SD card.
-/// Mostly does not matter.
 struct CidReg(u128);
 
 impl Default for CidReg {
@@ -322,7 +371,16 @@ impl Default for CidReg {
 struct CsdReg(u128);
 
 impl CsdReg {
-    fn new_with_num_block(num_blocks: usize) -> Self {
+    fn new(len: usize, capacity: CardCapacity) -> Self {
+        match capacity {
+            CardCapacity::HighCapacity => Self::new_v2(len / 512),
+            CardCapacity::StandardCapacity => Self::new_v1(len),
+        }
+    }
+
+    /// Build CSD Version 2.0 for SDHC cards (>2GB).
+    /// C_SIZE is in units of 512KB: memory capacity = (C_SIZE+1) * 512K byte
+    fn new_v2(num_blocks: usize) -> Self {
         let num_blocks = ((num_blocks & 0x3fffff) + 1) as u128; // mask to 22 bit, spec builds in an additional +1 as well.
         let x =
             (1 << 126) | //structure ver 2
@@ -338,5 +396,129 @@ impl CsdReg {
             (3 << 10) // file format other
         ;
         Self(x >> 8) /* mini is off, or we are - probably us!! */
+    }
+
+    /// Build CSD Version 1.0 for SDSC cards (<=2GB).
+    /// Uses the C_SIZE / C_SIZE_MULT / READ_BL_LEN encoding per SD Physical Layer spec Table 5-4.
+    ///
+    /// memory capacity = BLOCKNR * BLOCK_LEN
+    /// BLOCKNR = (C_SIZE+1) * MULT
+    /// MULT = 2^(C_SIZE_MULT+2)
+    /// BLOCK_LEN = 2^READ_BL_LEN
+    fn new_v1(len: usize) -> Self {
+        // ?? worth supporting oddly sized cards ??
+        //
+        // C_SIZE is 12 bits (0..4095), C_SIZE_MULT is 3 bits (0..7), READ_BL_LEN is 9,10, or 11.
+        //
+        // try READ_BL_LEN = 9 (512 bytes) first, then 10 (1024), then 11 (2048).
+        // for each, try C_SIZE_MULT from 0..7.
+        // Pick the first combination that works.
+        //
+        let mut read_bl_len: u128 = 9;
+        let mut c_size: u128 = 0;
+        let mut c_size_mult: u128 = 0;
+        let mut found = false;
+
+        for bl_len in [9u32, 10, 11] {
+            let block_len = 1usize << bl_len;
+            if len % block_len != 0 {
+                continue;
+            }
+            let total_blocks = len / block_len;
+            for mult_val in 0u32..=7 {
+                let mult = 1usize << (mult_val + 2);
+                if total_blocks % mult != 0 {
+                    continue;
+                }
+                let cs = (total_blocks / mult) - 1; // C_SIZE = BLOCKNR/MULT - 1
+                if cs <= 0xFFF { // C_SIZE fits in 12 bits
+                    read_bl_len = bl_len as u128;
+                    c_size = cs as u128;
+                    c_size_mult = mult_val as u128;
+                    found = true;
+                    break;
+                }
+            }
+            if found { break; }
+        }
+
+        if !found {
+            // Fallback: pick something reasonable. Use 512-byte blocks and max out C_SIZE_MULT.
+            // This handles odd-sized images by rounding down
+            let block_len = 512usize;
+            let mult = 1usize << 9; // C_SIZE_MULT=7 -> MULT=512
+            let total_blocks = len / block_len;
+            c_size = ((total_blocks / mult).saturating_sub(1).min(0xFFF)) as u128;
+            c_size_mult = 7;
+            read_bl_len = 9;
+            warn!(target: "SDHC", "CSD v1: using fallback encoding, capacity may not match exactly");
+        }
+
+        debug!(target: "SDHC", "CSD v1: READ_BL_LEN={}, C_SIZE={}, C_SIZE_MULT={}", read_bl_len, c_size, c_size_mult);
+
+        // CSD v1.0 bit layout (128 bits, [127:0]):
+        //  [127:126] CSD_STRUCTURE = 0 (v1.0)
+        //  [125:120] reserved = 0
+        //  [119:112] TAAC
+        //  [111:104] NSAC
+        //  [103:96]  TRAN_SPEED
+        //  [95:84]   CCC
+        //  [83:80]   READ_BL_LEN
+        //  [79]      READ_BL_PARTIAL = 1
+        //  [78]      WRITE_BLK_MISALIGN = 0
+        //  [77]      READ_BLK_MISALIGN = 0
+        //  [76]      DSR_IMP = 0
+        //  [75:74]   reserved = 0
+        //  [73:62]   C_SIZE (12 bits)
+        //  [61:59]   VDD_R_CURR_MIN
+        //  [58:56]   VDD_R_CURR_MAX
+        //  [55:53]   VDD_W_CURR_MIN
+        //  [52:50]   VDD_W_CURR_MAX
+        //  [49:47]   C_SIZE_MULT (3 bits)
+        //  [46]      ERASE_BLK_EN = 1
+        //  [45:39]   SECTOR_SIZE = 0x7f (128 write blocks)
+        //  [38:32]   WP_GRP_SIZE = 0
+        //  [31]      WP_GRP_ENABLE = 0
+        //  [30:29]   reserved = 0
+        //  [28:26]   R2W_FACTOR = 0b010 (4x)
+        //  [25:22]   WRITE_BL_LEN = READ_BL_LEN
+        //  [21]      WRITE_BL_PARTIAL = 0
+        //  [20:16]   reserved = 0
+        //  [15]      FILE_FORMAT_GRP = 0
+        //  [14]      COPY = 0
+        //  [13]      PERM_WRITE_PROTECT = 0
+        //  [12]      TMP_WRITE_PROTECT = 0
+        //  [11:10]   FILE_FORMAT = 0b11 (other)
+        //  [9:8]     reserved = 0
+        //  [7:1]     CRC = 0 (not checked ????)
+        //  [0]       always 1
+        let x: u128 =
+            (0u128 << 126) |                    // CSD_STRUCTURE = 0 (v1.0)
+            (0x26u128 << 112) |                 // TAAC = 0x26 (1ms, matches typical SDSC)
+            (0x00u128 << 104) |                 // NSAC = 0
+            (0x32u128 << 96) |                  // TRAN_SPEED = 25MHz
+            (0b010110110101u128 << 84) |        // CCC - mandatory classes
+            (read_bl_len << 80) |               // READ_BL_LEN
+            (0u128 << 79) |                     // READ_BL_PARTIAL = 0
+            (0u128 << 78) |                     // WRITE_BLK_MISALIGN = 0
+            (0u128 << 77) |                     // READ_BLK_MISALIGN = 0
+            (0u128 << 76) |                     // DSR_IMP = 0
+            (c_size << 62) |                    // C_SIZE (12 bits)
+            (0b011u128 << 59) |                 // VDD_R_CURR_MIN = 10mA
+            (0b011u128 << 56) |                 // VDD_R_CURR_MAX = 25mA
+            (0b011u128 << 53) |                 // VDD_W_CURR_MIN = 10mA
+            (0b011u128 << 50) |                 // VDD_W_CURR_MAX = 25mA
+            (c_size_mult << 47) |               // C_SIZE_MULT
+            (1u128 << 46) |                     // ERASE_BLK_EN = 1
+            (0x7fu128 << 39) |                  // SECTOR_SIZE = 127 (128 blocks)
+            (0u128 << 32) |                     // WP_GRP_SIZE = 0
+            (0u128 << 31) |                     // WP_GRP_ENABLE = 0
+            (0b010u128 << 26) |                 // R2W_FACTOR = 4x
+            (read_bl_len << 22) |               // WRITE_BL_LEN = READ_BL_LEN
+            (0u128 << 21) |                     // WRITE_BL_PARTIAL = 0
+            (0b11u128 << 10) |                  // FILE_FORMAT = other
+            1u128                               // always 1 bit
+        ;
+        Self(x >> 8) /* fuck me idk */
     }
 }
