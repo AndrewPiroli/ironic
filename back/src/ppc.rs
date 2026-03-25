@@ -32,6 +32,8 @@ pub enum Command {
     Message, 
     Ack, 
     MessageNoReturn,
+    PatchRange,
+    DisableProtections,
     Shutdown,
     Unimpl,
 }
@@ -43,6 +45,8 @@ impl Command {
             3 => Self::Message,
             4 => Self::Ack,
             5 => Self::MessageNoReturn,
+            14 => Self::PatchRange,
+            15 => Self::DisableProtections,
             255 => Self::Shutdown,
             _ => Self::Unimpl,
         }
@@ -64,6 +68,48 @@ impl SocketReq {
         let addr = u32::from_le_bytes(s[0x4..0x8].try_into().unwrap());
         let len = u32::from_le_bytes(s[0x8..0xc].try_into().unwrap());
         SocketReq { cmd, addr, len }
+    }
+}
+
+#[derive(Debug)]
+pub struct PatchRange<'a> {
+    start: u32,
+    end: u32,
+    old: &'a [u8],
+    new: &'a [u8],
+    offset: u32,
+}
+
+impl<'a> From<&'a [u8]> for PatchRange<'a> {
+    fn from(value: &'a [u8]) -> Self {
+        fn copy_u32(from: &[u8]) -> u32 {
+            u32::from_be_bytes(from[..4].try_into().unwrap())
+        }
+        // memory layout
+        // 00 start u32
+        // 04 end u32 
+        // 08 old len u32
+        // 0c new len u32
+        // 10 offset u32
+        // old...
+        // new...
+        let start = copy_u32(&value[0..4]);
+        let end = copy_u32(&value[4..8]);
+        let old_len = copy_u32(&value[8..0xc]);
+        let new_len = copy_u32(&value[0xc..0x10]);
+        let offset = copy_u32(&value[0x10..0x14]);
+
+        let old_start_idx = 0x14usize;
+        let old_end_idx = old_start_idx + old_len as usize;
+        let new_start_idx = old_end_idx;
+        let new_end_idx = new_start_idx + new_len as usize;
+        Self {
+            start,
+            end,
+            old: &value[old_start_idx..old_end_idx],
+            new: &value[new_start_idx..new_end_idx],
+            offset ,
+        }
     }
 }
 
@@ -147,6 +193,18 @@ impl PpcBackend {
                         Command::MessageNoReturn => {
                             self.handle_message(&mut client, req)?;
                         },
+                        Command::PatchRange => {
+                            self.handle_patch_range(&mut client, req)?;
+                        },
+                        Command::DisableProtections => {
+                            {
+                                let mut bus = self.bus.write();
+                                bus.hlwd.busctrl.ahbprot = 0xFFFFFFFF;
+                                bus.hlwd.busctrl.srnprot &= 0x1F;
+                                log::info!(target: "RTPATCH", "AHBPROT and SRNPROT protections disabled");
+                            }
+                            let _ = client.write(b"OK")?;
+                        }
                         Command::Shutdown => {
                             let _ = client.write(b"kk")?;
                             break;
@@ -278,6 +336,44 @@ impl PpcBackend {
         bus.hlwd.ipc.state.arm_req = true;
         bus.hlwd.ipc.state.arm_ack = true;
         let _ = client.write("OK".as_bytes())?; // maybe FIXME: is it ok to ignore the # of bytes written here?
+        Ok(())
+    }
+
+    /// Search for a memory range and patch some bytes
+    /// libruntimeiospatch inspired
+    pub fn handle_patch_range(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
+        use log::{debug, info, error};
+        use anyhow::bail;
+        let mut bus = self.bus.write();
+        let mut copy = vec![0u8; req.len as usize];
+        if let Err(e) = bus.dma_read(req.addr, &mut copy) {
+            error!(target: "RTPATCH", "Failed initial read of {:x} for runtime patch. {e:?}", req.addr);
+            client.write(&[0,0])?;
+            bail!(e);
+        }
+        use std::ops::Deref;
+        let p = PatchRange::from(copy.deref()); // wtf ?
+        debug!(target: "RTPATCH", "Decoded runtime patch {p:?}");
+        let mut found = 0u16;
+
+        let mut current = p.start;
+        let mut buf = vec![0u8; p.old.len()];
+        while current < (p.end - p.old.len() as u32) {
+            if let Err(a) = bus.dma_read(current, &mut buf) {
+                error!(target: "RTPATCH", "Failed to read memory at {current:x} {a:?}. Found: {found}");
+                break;
+            }
+            if buf == p.old {
+                if let Err(e) = bus.dma_write(current+p.offset, p.new) {
+                    error!(target: "RTPATCH", "Failed during patch apply: {current:x}+{:x}. {e:?}", p.offset);
+                    bail!(e);
+                }
+                found += 1;
+            }
+            current += 1;
+        }
+        info!(target: "RTPATCH", "Applied patch {} times", found);
+        let _ = client.write(&found.to_le_bytes())?;
         Ok(())
     }
 

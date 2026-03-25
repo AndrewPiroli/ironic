@@ -3,19 +3,7 @@ from struct import pack, unpack
 from pyronic.socket import *
 from pyronic.ios import *
 from hexdump import hexdump
-
-class MemHandle(object):
-    """ A handle to some piece of guest memory """
-    def __init__(self, sock, paddr, size):
-        self.__sock = sock
-        self.paddr = paddr
-        self.size = size
-    def read(self, off=0, size=None):
-        return self.__sock.send_guestread(self.paddr, self.size)
-    def write(self, buf, off=0):
-        assert len(buf) <= self.size
-        self.__sock.send_guestwrite(self.paddr, buf)
-        self.data_size = len(buf)
+from . import PatchRange, MemHandle
 
 
 class PPCMemory(object):
@@ -98,6 +86,13 @@ class IPCClient(object):
         self.sock.send_ipcmsg(buf.paddr)
         response_ptr = self.sock.recv_ipcmsg()
         return MemHandle(self.sock, response_ptr, 0x20)
+
+    def guest_patch(self, patch: PatchRange):
+        buf = self.alloc_buf(patch.to_buffer())
+        return self.sock.send_patch_range(buf)
+
+    def disable_ppc_protections(self):
+        self.sock.send_disableprot()
 
     def IOSOpen(self, inpath, mode=0):
         buf = self.alloc_buf(inpath.encode('utf-8') + b'\x00')

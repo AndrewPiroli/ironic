@@ -1,5 +1,6 @@
 from enum import IntEnum
 from struct import pack, unpack
+from . import ToBuffer, PatchRange
 
 class IOSErr(IntEnum):
     FS_EINVAL       = -4
@@ -37,7 +38,7 @@ class SDIO(IntEnum):
     GetStatus = 0xb
     GetOCR = 0xc
 
-class IPCMsg(object):
+class IPCMsg(ToBuffer):
     """ A structure representing some PPC-to-ARM IPC message. 
     After this is filled out, the user will obtain the raw bytes and write 
     them to physical memory somewhere (aligned to 32-byte boundaries).
@@ -48,11 +49,20 @@ class IPCMsg(object):
         self.fd = fd
         self.args = args
 
-    def to_buffer(self):
+    def to_buffer(self) -> bytes:
         """ Convert to a big-endian binary representation """
         while len(self.args) < 5: 
             self.args.append(0)
         assert len(self.args) == 5
         return pack(">Lii5L", self.cmd, self.res, self.fd, *self.args)
 
-
+class Patches:
+    Trucha  = PatchRange(0x133E0000, 0x14000000, bytearray([0x20, 0x07, 0x23, 0xA2]), bytearray([0,]), 1)
+    Trucha2 = PatchRange(0x133E0000, 0x14000000, bytearray([0x20, 0x07, 0x4B, 0x0B]), bytearray([0,]), 1)
+    ISFS_Permissions = PatchRange(0x133E0000, 0x14000000, bytearray([0x42, 0x8B, 0xD0, 0x01, 0x25, 0x66]), bytearray([0x42, 0x8B, 0xE0, 0x01, 0x25, 0x66]), 0)
+    ES_Identify = PatchRange(0x133E0000, 0x14000000, bytearray([0x28, 0x03, 0xD1, 0x23]), bytearray([0, 0]), 2)
+    ES_TitleVersionCheck = PatchRange(0x133E0000, 0x14000000, bytearray([0xD2, 0x01, 0x4E, 0x56]), bytearray([0xE0, 0x01, 0x4E, 0x56]), 0)
+    ES_TitleDeleteCheck = PatchRange(0x133E0000, 0x14000000, bytearray([0xD8, 0x00, 0x4A, 0x04]), bytearray([0xE0, 0x00, 0x4A, 0x04]), 0)
+    ES_ImportBoot_Downgrade = PatchRange(0x133E0000, 0x14000000, bytearray([0x68, 0x5a, 0x9b, 0x1e, 0x42, 0x9a, 0xd2, 0x01]), bytearray([0x68, 0x5a, 0x9b, 0x1e, 0x42, 0x9a, 0xe0, 0x01]), 0)
+    ES_SetUID = PatchRange(0x133E0000, 0x14000000, bytearray([0xD1, 0x2A, 0x1C, 0x39]), bytearray([0x46, 0xC0]), 0)
+    ES_Force_AHBPROT = PatchRange(0x133E0000, 0x14000000, bytearray([0x68, 0x5B, 0x22, 0xEC, 0x00, 0x52, 0x18, 0x9B, 0x68, 0x1B, 0x46, 0x98, 0x07, 0xDB]), bytearray([0x23, 0xFF]), 8) 

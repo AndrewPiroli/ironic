@@ -189,6 +189,7 @@ enum LogTarget {
     SYSCALL,
     SVC,
     xHCI,
+    RTPATCH,
     Other,
 }
 

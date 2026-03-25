@@ -1,5 +1,6 @@
 import socket
 from struct import pack, unpack
+from . import MemHandle
 WRITE_LIMIT = 10000 - 12 # back/src/ppc.rs const BUF_LEN=100000 subtract message header 12 bytes
 
 class IronicSocket(object):
@@ -9,6 +10,8 @@ class IronicSocket(object):
     IRONIC_MSG     = 3
     IRONIC_ACK     = 4
     IRONIC_MSGNORET= 5
+    IRONIC_PATCH   = 14
+    IRONIC_DISABLEPROT = 15
     IRONIC_QUIT    = 255
 
     def __init__(self, filename="/tmp/ironic-ppc.sock"):
@@ -62,6 +65,20 @@ class IronicSocket(object):
         """ Send an IPC message command to the server """
         msg = bytearray()
         msg += pack("<LLL", self.IRONIC_MSGNORET, ptr, 4)
+        self.socket.send(msg)
+        resp = self.socket.recv(2)
+        assert resp.decode('utf-8') == "OK"
+
+    def send_patch_range(self, h: MemHandle) -> int:
+        msg = bytearray()
+        msg += pack("<LLL", self.IRONIC_PATCH, h.paddr, h.size)
+        self.socket.send(msg)
+        resp = self.socket.recv(2)
+        return unpack("<H", resp)[0]
+
+    def send_disableprot(self):
+        msg = bytearray()
+        msg += pack("<LLL", self.IRONIC_DISABLEPROT, 0, 0)
         self.socket.send(msg)
         resp = self.socket.recv(2)
         assert resp.decode('utf-8') == "OK"
