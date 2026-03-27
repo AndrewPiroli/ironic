@@ -38,6 +38,7 @@ static BOOT1_VERSIONS: &[([u32;5], &str)] = &[
     ([0xef3ef781, 0x09608d56, 0xdf5679a6, 0xf92e13f7, 0x8bbddfdf], "b"),
     ([0xd220c8a4, 0x86c631d0, 0xdf5adb31, 0x96ecbc66, 0x8780cc8d], "c"),
     ([0xf793068a, 0x09e80986, 0xe2a023c0, 0xc23f0614, 0x0ed16974], "d"),
+    ([0x153c2a63, 0x4aa4fe3d, 0xd9773d02, 0x8ac9d920, 0x0c2d5eea], "-RVL_prewrite_20080602 (SDBoot)"), // unsorted.7z/rvl-factory/prewrite-062308
 ];
 
 
