@@ -167,3 +167,13 @@ class IPCClient(object):
         msg = IPCMsg(self.IPC_IOCTL, fd=fd, args=[cmd, h_in.paddr, h_in.size, h_out.paddr, h_out.size])
         res = self.guest_ipc(msg)
         return unpack(">i", res.read()[4:8])[0]
+
+    def IOSRead(self, fd, h: MemHandle, length: int):
+        msg = IPCMsg(self.IPC_READ, fd=fd, args=[h.paddr, length, 0, 0, 0])
+        res = self.guest_ipc(msg)
+        return unpack(">i", res.read()[4:8])[0]
+
+    def IOSWrite(self, fd, h: MemHandle, length: int):
+        msg = IPCMsg(self.IPC_WRITE, fd=fd, args=[h.paddr, length, 0, 0, 0])
+        res = self.guest_ipc(msg)
+        return unpack(">i", res.read()[4:8])[0]

@@ -38,7 +38,7 @@ class IronicSocket(object):
         offset = 0
         while offset != len(buf):
             next_offset = min(len(buf), offset+WRITE_LIMIT)
-            self.send_guestwrite(offset, buf[offset:next_offset])
+            self.send_guestwrite(paddr + offset, buf[offset:next_offset])
             offset = next_offset
         pass
 
