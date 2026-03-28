@@ -100,9 +100,12 @@ impl Cpu {
     fn l2_fetch(&self, vaddr: VirtAddr, d: L1Descriptor) -> anyhow::Result<L2Descriptor> {
         let addr = match d {
             L1Descriptor::Coarse(e) => {
-                e.base_addr() | vaddr.l2_idx_coarse() << 2
+                e.base_addr() | (vaddr.l2_idx_coarse() << 2)
             },
-            _ => bail!("l2_fetch requires an L1::Coarse descriptor"),
+            L1Descriptor::Fine(e) => {
+                e.base_addr() | (vaddr.l2_idx_fine() << 2)
+            }
+            _ => bail!("l2_fetch requires an L1::Coarse or L1::Fine descriptor"),
         };
         let val = self.bus.read().read32(addr)?;
 
@@ -115,6 +118,7 @@ impl Cpu {
             match self.l1_fetch(req.vaddr)? {
                 L1Descriptor::Section(entry) => Ok(self.resolve_section(req, entry)?),
                 L1Descriptor::Coarse(entry) => self.resolve_coarse(req, entry),
+                L1Descriptor::Fine(entry) => self.resolve_fine(req, entry),
                 other => bail!("TLB first-level descriptor {other:?} unimplemented"),
             }
         } else {

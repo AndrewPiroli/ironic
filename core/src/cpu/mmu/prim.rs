@@ -99,6 +99,7 @@ impl VirtAddr {
     const SECTION_IDX: u32      = 0b0000_0000_0000_1111_1111_1111_1111_1111;
 
     const L2_IDX_COARSE: u32    = 0b0000_0000_0000_1111_1111_0000_0000_0000;
+    const L2_IDX_FINE: u32      = 0b0000_0000_0000_1111_1111_1100_0000_0000;
     //const LARGEPAGE_IDX: u32    = 0b0000_0000_0000_0000_1111_1111_1111_1111;
     const SMALLPAGE_IDX: u32    = 0b0000_0000_0000_0000_0000_1111_1111_1111;
     //const TINYPAGE_IDX: u32     = 0b0000_0000_0000_0000_0000_0011_1111_1111;
@@ -106,6 +107,7 @@ impl VirtAddr {
     pub fn l1_idx(&self) -> u32 { (self.0 & Self::L1_IDX) >> 20 }
     pub fn section_idx(&self) -> u32 { self.0 & Self::SECTION_IDX }
     pub fn l2_idx_coarse(&self) -> u32 { (self.0 & Self::L2_IDX_COARSE) >> 12 }
+    pub fn l2_idx_fine(&self) -> u32 { (self.0 & Self::L2_IDX_FINE) >> 10 }
     pub fn small_page_idx(&self) -> u32 { self.0 & Self::SMALLPAGE_IDX }
 }
 
@@ -116,6 +118,7 @@ pub enum L1Descriptor {
     Fault(u32),
     //Fault(FaultDescriptor),
     Coarse(CoarseDescriptor),
+    Fine(FineDescriptor),
     Section(SectionDescriptor),
     //Fine(FineDescriptor),
 }
@@ -125,10 +128,25 @@ impl L1Descriptor {
             0b00 => L1Descriptor::Fault(0),
             0b01 => L1Descriptor::Coarse(CoarseDescriptor(x)),
             0b10 => L1Descriptor::Section(SectionDescriptor(x)),
-            0b11 => panic!("L1 Fine-page descriptor unimplemented"),
+            0b11 => L1Descriptor::Fine(FineDescriptor(x)),
             _ => unreachable!(),
         }
     }
+}
+
+/// A fine page table descriptor in the first-level page table.
+#[derive(Copy, Clone, Debug)]
+#[repr(transparent)]
+pub struct FineDescriptor(pub u32);
+impl FineDescriptor {
+    
+    const ADDR_MASK: u32 = 0b11111111_11111111_11110000_00000000;
+    const AP_MASK: u32   = 0b00000000_00000000_00000000_11000000;
+    const DOM_MASK: u32  = 0b00000000_00000000_00000000_00111100;
+
+    pub fn base_addr(&self) -> u32 { self.0 & Self::ADDR_MASK }
+    pub fn domain(&self) -> u32 { (self.0 & Self::DOM_MASK) >> 5 }
+    pub fn ap(&self) -> u32 { (self.0 & Self::AP_MASK) >> 10 }
 }
 
 /// A section descriptor entry in the first-level page table.
