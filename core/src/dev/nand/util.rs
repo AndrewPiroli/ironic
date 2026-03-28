@@ -8,9 +8,9 @@ pub fn calc_ecc(data: &mut [u8]) -> u32 {
     let mut a0 = 0u32;
     let mut a1 = 0u32;
 
-    for (idx, data) in data.iter().enumerate().take(512) {
+    for (idx, byte) in data.iter().enumerate().take(512) {
         for j in 0..9 {
-            a[3 + j][(idx >> j) & 1] ^= data;
+            a[3 + j][(idx >> j) & 1] ^= byte;
         }
     }
 
