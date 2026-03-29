@@ -222,14 +222,14 @@ impl PpcBackend {
 
     /// Block until we get a response from ARM-world.
     fn wait_for_resp(&mut self) -> u32 {
-        info!(target: "PPC", "waiting for response ...");
+        debug!(target: "PPC", "waiting for response ...");
         loop {
             if self.bus.read().hlwd.irq.ppc_irq_output {
-                info!(target: "PPC", "got irq");
+                debug!(target: "PPC", "got irq");
                 let mut bus = self.bus.write();
 
                 if bus.hlwd.ipc.state.ppc_ack {
-                    info!(target: "PPC", "got extra ACK");
+                    debug!(target: "PPC", "got extra ACK");
                     bus.hlwd.ipc.state.ppc_ack = false;
                     bus.hlwd.irq.ppc_irq_status.unset(HollywoodIrq::PpcIpc);
                     bus.hlwd.irq.update_irq_lines();
@@ -238,7 +238,7 @@ impl PpcBackend {
 
                 if bus.hlwd.ipc.state.ppc_req {
                     let armmsg = bus.hlwd.ipc.arm_msg;
-                    info!(target: "PPC", "Got message from ARM {armmsg:08x}");
+                    debug!(target: "PPC", "Got message from ARM {armmsg:08x}");
                     bus.hlwd.ipc.state.ppc_req = false;
                     bus.hlwd.ipc.state.arm_ack = true;
                     bus.hlwd.irq.ppc_irq_status.unset(HollywoodIrq::PpcIpc);
@@ -257,22 +257,22 @@ impl PpcBackend {
 
     /// Block until we get an ACK from ARM-world.
     fn wait_for_ack(&mut self) {
-        info!(target: "PPC", "waiting for ACK ...");
+        debug!(target: "PPC", "waiting for ACK ...");
         loop {
             if self.bus.read().hlwd.irq.ppc_irq_output {
-                info!(target: "PPC", "got irq");
+                debug!(target: "PPC", "got irq");
                 let mut bus = self.bus.write();
 
                 if bus.hlwd.ipc.state.ppc_ack {
                     bus.hlwd.ipc.state.ppc_ack = false;
-                    info!(target: "PPC", "got ACK");
+                    debug!(target: "PPC", "got ACK");
                     bus.hlwd.irq.ppc_irq_status.unset(HollywoodIrq::PpcIpc);
                     bus.hlwd.irq.update_irq_lines();
                     break;
                 }
                 if bus.hlwd.ipc.state.ppc_req {
                     let armmsg = bus.hlwd.ipc.arm_msg;
-                    info!(target: "PPC", "Got extra message from ARM {armmsg:08x}");
+                    debug!(target: "PPC", "Got extra message from ARM {armmsg:08x}");
                     bus.hlwd.ipc.state.ppc_req = false;
                     bus.hlwd.ipc.state.arm_ack = true;
                     bus.hlwd.irq.ppc_irq_status.unset(HollywoodIrq::PpcIpc);
@@ -316,7 +316,7 @@ impl PpcBackend {
 
     /// Read from physical memory.
     pub fn handle_read(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
-        info!(target: "PPC", "read {:x} bytes at {:08x}", req.len, req.addr);
+        debug!(target: "PPC", "read {:x} bytes at {:08x}", req.len, req.addr);
         self.bus.read().dma_read(req.addr,
             &mut self.obuf[0..req.len as usize])?;
         client.write_all(&self.obuf[0..req.len as usize])?;
@@ -325,7 +325,7 @@ impl PpcBackend {
 
     /// Write to physical memory.
     pub fn handle_write(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
-        info!(target: "PPC", "write {:x} bytes at {:08x}", req.len, req.addr);
+        debug!(target: "PPC", "write {:x} bytes at {:08x}", req.len, req.addr);
         let data = &self.ibuf[0xc..(0xc + req.len as usize)];
         self.bus.write().dma_write(req.addr, data)?;
         client.write_all(b"OK")?;

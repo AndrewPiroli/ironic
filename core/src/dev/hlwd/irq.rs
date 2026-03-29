@@ -1,5 +1,5 @@
 use anyhow::bail;
-use log::{debug, error, info};
+use log::{debug, error};
 
 
 #[derive(Debug, Copy, Clone)]
@@ -92,7 +92,7 @@ impl IrqInterface {
         match off {
             0x04 => {
                 self.ppc_irq_enable.0 = val;
-                info!(target: "IRQ", "PPC enable={val:08x}");
+                debug!(target: "IRQ", "PPC enable={val:08x}");
             },
 
             0x08 => {
@@ -103,7 +103,7 @@ impl IrqInterface {
             // NOTE: When a pin is disabled, does it clear the status bit?
             0x0c => {
                 self.arm_irq_enable.0 = val;
-                info!(target: "IRQ", "ARM enable={val:08x}");
+                debug!(target: "IRQ", "ARM enable={val:08x}");
             },
 
             0x10 => {
