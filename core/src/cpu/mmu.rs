@@ -51,24 +51,27 @@ impl Cpu {
         }
     }
 
-    /// Resolve a coarse descriptor, returning a physical address.
-    #[allow(unreachable_patterns)]
-    fn resolve_coarse(&self, req: TLBReq, d: CoarseDescriptor) -> anyhow::Result<u32> {
-        let desc = match self.l2_fetch(req.vaddr, L1Descriptor::Coarse(d)) {
+    /// Resolve a page table descriptor, returning a physical address.
+    fn resolve_page_table(&self, req: TLBReq, d: L1Descriptor) -> anyhow::Result<u32> {
+        let domain = match d {
+            L1Descriptor::Coarse(ref e) => e.domain(),
+            L1Descriptor::Fine(ref e)   => e.domain(),
+            _ => bail!("resolve_page_table: expected Coarse or Fine descriptor"),
+        };
+        let desc = match self.l2_fetch(req.vaddr, d) {
             Ok(val) => val,
             Err(reason) => return Err(reason),
         };
         match desc {
             L2Descriptor::SmallPage(entry) => {
-                let ctx = self.get_ctx(d.domain());
+                let ctx = self.get_ctx(domain);
                 if ctx.validate(&req, entry.get_ap(req.vaddr)) {
                     Ok(entry.base_addr() | req.vaddr.small_page_idx())
                 } else {
-                    dbg!(self.p15.c3_dacr.domain(d.domain()));
-                    bail!("resolve_coarse: Domain access faults are unimplemented, vaddr={:08x}", req.vaddr.0)
+                    dbg!(self.p15.c3_dacr.domain(domain));
+                    bail!("resolve_page_table: Domain access faults are unimplemented, vaddr={:08x}", req.vaddr.0)
                 }
             },
-            _ => bail!("L2 descriptor {:?} unimplemented, vaddr={:08x}", desc, req.vaddr.0),
         }
     }
 
@@ -117,8 +120,8 @@ impl Cpu {
         if self.p15.c1_ctrl.mmu_enabled() {
             match self.l1_fetch(req.vaddr)? {
                 L1Descriptor::Section(entry) => Ok(self.resolve_section(req, entry)?),
-                L1Descriptor::Coarse(entry) => self.resolve_coarse(req, entry),
-                L1Descriptor::Fine(entry) => self.resolve_fine(req, entry),
+                L1Descriptor::Coarse(entry) => self.resolve_page_table(req, L1Descriptor::Coarse(entry)),
+                L1Descriptor::Fine(entry) => self.resolve_page_table(req, L1Descriptor::Fine(entry)),
                 other => bail!("TLB first-level descriptor {other:?} unimplemented"),
             }
         } else {

@@ -139,14 +139,13 @@ impl L1Descriptor {
 #[repr(transparent)]
 pub struct FineDescriptor(pub u32);
 impl FineDescriptor {
-    
+
     const ADDR_MASK: u32 = 0b11111111_11111111_11110000_00000000;
-    const AP_MASK: u32   = 0b00000000_00000000_00000000_11000000;
-    const DOM_MASK: u32  = 0b00000000_00000000_00000000_00111100;
+    const DOM_MASK: u32  = 0b00000000_00000000_00000001_11100000;
 
     pub fn base_addr(&self) -> u32 { self.0 & Self::ADDR_MASK }
     pub fn domain(&self) -> u32 { (self.0 & Self::DOM_MASK) >> 5 }
-    pub fn ap(&self) -> u32 { (self.0 & Self::AP_MASK) >> 10 }
+    pub fn ap(&self) -> u32 { panic!(""); }
 }
 
 /// A section descriptor entry in the first-level page table.
