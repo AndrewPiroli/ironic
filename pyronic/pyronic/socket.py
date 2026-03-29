@@ -18,19 +18,32 @@ class IronicSocket(object):
         self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.socket.connect(filename)
 
+    def recv(self, size: int) -> bytes:
+        if size < 0:
+            raise ValueError(f"_recv_exact called with negative size: {size}")
+        out = bytearray()
+        while len(out) < size:
+            chunk = self.socket.recv(size - len(out))
+            if not chunk:
+                raise RuntimeError(
+                    f"Socket closed while receiving {size} bytes; got {len(out)} bytes"
+                )
+            out.extend(chunk)
+        return bytes(out)
+
     def close(self): 
         msg = bytearray()
         msg += pack("<LLL", self.IRONIC_QUIT, 0, 0)
-        self.socket.send(msg)
-        _ = self.socket.recv(2)
+        self.socket.sendall(msg)
+        _ = self.recv(2)
         self.socket.close()
 
     def send_guestread(self, paddr, size):
         """ Send a guest read command to the server """
         msg = bytearray()
         msg += pack("<LLL", self.IRONIC_READ, paddr, size)
-        self.socket.send(msg)
-        resp = self.socket.recv(size)
+        self.socket.sendall(msg)
+        resp = self.recv(size)
         assert len(resp) == size
         return resp
 
@@ -50,43 +63,43 @@ class IronicSocket(object):
         msg = bytearray()
         msg += pack("<LLL", self.IRONIC_WRITE, paddr, len(buf))
         msg += buf
-        self.socket.send(msg)
-        resp = self.socket.recv(2)
+        self.socket.sendall(msg)
+        resp = self.recv(2)
         assert resp.decode('utf-8') == "OK"
 
     def send_ipcmsg(self, ptr):
         """ Send an IPC message command to the server """
         msg = bytearray()
         msg += pack("<LLL", self.IRONIC_MSG, ptr, 4)
-        self.socket.send(msg)
-        resp = self.socket.recv(2)
+        self.socket.sendall(msg)
+        resp = self.recv(2)
         assert resp.decode('utf-8') == "OK"
     def send_ipcmsg_noret(self, ptr):
         """ Send an IPC message command to the server """
         msg = bytearray()
         msg += pack("<LLL", self.IRONIC_MSGNORET, ptr, 4)
-        self.socket.send(msg)
-        resp = self.socket.recv(2)
+        self.socket.sendall(msg)
+        resp = self.recv(2)
         assert resp.decode('utf-8') == "OK"
 
     def send_patch_range(self, h: MemHandle) -> int:
         msg = bytearray()
         msg += pack("<LLL", self.IRONIC_PATCH, h.paddr, h.size)
-        self.socket.send(msg)
-        resp = self.socket.recv(2)
+        self.socket.sendall(msg)
+        resp = self.recv(2)
         return unpack("<H", resp)[0]
 
     def send_disableprot(self):
         msg = bytearray()
         msg += pack("<LLL", self.IRONIC_DISABLEPROT, 0, 0)
-        self.socket.send(msg)
-        resp = self.socket.recv(2)
+        self.socket.sendall(msg)
+        resp = self.recv(2)
         assert resp.decode('utf-8') == "OK"
 
 
     def recv_ipcmsg(self):
         """ Wait for the server to respond with a pointer to an IPC message """
-        res_buf = self.socket.recv(4)
+        res_buf = self.recv(4)
         res_ptr = unpack("<L", res_buf)[0]
         return res_ptr
 
@@ -94,8 +107,8 @@ class IronicSocket(object):
         """ Send an ACK command to the server """
         msg = bytearray()
         msg += pack("<LLL", self.IRONIC_ACK, 0, 0)
-        self.socket.send(msg)
-        resp = self.socket.recv(2)
+        self.socket.sendall(msg)
+        resp = self.recv(2)
         assert resp.decode('utf-8') == "OK"
 
 

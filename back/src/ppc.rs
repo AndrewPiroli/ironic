@@ -7,7 +7,7 @@ use ironic_core::bus::*;
 use ironic_core::dev::hlwd::irq::*;
 use crate::back::*;
 
-use log::{info, error};
+use log::{info, error, debug};
 use parking_lot::RwLock;
 use std::env::temp_dir;
 use std::path::PathBuf;
@@ -136,12 +136,18 @@ impl PpcBackend {
         }
     }
 
-    fn recv(&mut self, client: &mut UnixStream) -> Option<usize> {
-        let res = client.read(&mut self.ibuf);
-        match res {
-            Ok(len) => if len == 0 { None } else { Some(len) },
-            Err(_) => None
+    fn recv(client: &mut UnixStream, buf: &mut [u8]) -> anyhow::Result<bool> {
+        let mut offset = 0usize;
+        while offset < buf.len() {
+            match client.read(&mut buf[offset..])? {
+                0 if offset == 0 => {
+                    return Ok(false);
+                },
+                0 => anyhow::bail!("Socket closed mid-frame: expected {} bytes, got {offset}", buf.len()),
+                n => offset += n,
+            }
         }
+        Ok(true)
     }
 }
 
@@ -176,42 +182,39 @@ impl PpcBackend {
             };
             self.socket_errors = 0;
 
-            loop {
-                info!(target:"PPC", "waiting for command");
-
-                let res = self.wait_for_request(&mut client);
-                if let Some(req) = res {
-                    match req.cmd {
-                        Command::Ack => self.handle_ack(req)?,
-                        Command::HostRead => self.handle_read(&mut client, req)?,
-                        Command::HostWrite => self.handle_write(&mut client, req)?,
-                        Command::Message => {
-                            self.handle_message(&mut client, req)?;
-                            let armmsg = self.wait_for_resp();
-                            let _ = client.write(&u32::to_le_bytes(armmsg))?; // maybe FIXME: is it ok to ignore the # of bytes written here?
-                        },
-                        Command::MessageNoReturn => {
-                            self.handle_message(&mut client, req)?;
-                        },
-                        Command::PatchRange => {
-                            self.handle_patch_range(&mut client, req)?;
-                        },
-                        Command::DisableProtections => {
-                            {
-                                let mut bus = self.bus.write();
-                                bus.hlwd.busctrl.ahbprot = 0xFFFFFFFF;
-                                bus.hlwd.busctrl.srnprot &= 0x1F;
-                                log::info!(target: "RTPATCH", "AHBPROT and SRNPROT protections disabled");
-                            }
-                            let _ = client.write(b"OK")?;
-                        }
-                        Command::Shutdown => {
-                            let _ = client.write(b"kk")?;
-                            break;
-                        }
-                        Command::Unimpl => break,
+            while let Some(req) = self.wait_for_request(&mut client)? {
+                match req.cmd {
+                    Command::Ack => self.handle_ack(req)?,
+                    Command::HostRead => self.handle_read(&mut client, req)?,
+                    Command::HostWrite => self.handle_write(&mut client, req)?,
+                    Command::Message => {
+                        self.handle_message(&mut client, req)?;
+                        let armmsg = self.wait_for_resp();
+                        client.write_all(&u32::to_le_bytes(armmsg))?; // maybe FIXME: is it ok to ignore the # of bytes written here?
+                    },
+                    Command::MessageNoReturn => {
+                        self.handle_message(&mut client, req)?;
+                    },
+                    Command::PatchRange => {
+                        self.handle_patch_range(&mut client, req)?;
+                    },
+                    Command::DisableProtections => {
+                        let mut bus = self.bus.write();
+                        bus.hlwd.busctrl.ahbprot = 0xFFFFFFFF;
+                        bus.hlwd.busctrl.srnprot &= 0x1F;
+                        log::info!(target: "RTPATCH", "AHBPROT and SRNPROT protections disabled");
+                        client.write_all(b"OK")?;
                     }
+                    Command::Shutdown => {
+                        client.write_all(b"kk")?;
+                        break;
+                    }
+                    Command::Unimpl => {
+                        error!(target: "PPC", "recieved unimplemented command");
+                        break;
+                    },
                 }
+                debug!(target:"PPC", "waiting for command");
             }
             client.shutdown(Shutdown::Both)?;
         Ok(())
@@ -287,27 +290,28 @@ impl PpcBackend {
     }
 
     /// Block until we receive some command message from a client.
-    fn wait_for_request(&mut self, client: &mut UnixStream) -> Option<SocketReq> {
-        let mut long_block = 0u8;
-        loop {
-            let try_recv = self.recv(client); // maybe FIXME: allow discarding recv length here?
-            // As we wait longer, increase the time we sleep
-            if try_recv.is_none() {
-                long_block = long_block.saturating_add(1);
-                std::thread::sleep(std::time::Duration::from_millis(5 * long_block as u64));
-            }
-            else {
-                break;
-            }
+    fn wait_for_request(&mut self, client: &mut UnixStream) -> anyhow::Result<Option<SocketReq>> {
+        if !Self::recv(client, &mut self.ibuf[..0xc])? {
+            return Ok(None);
         }
-        let req = SocketReq::from_buf(
-            &self.ibuf[0..0xc].try_into().unwrap()
-        );
+
+        let req = SocketReq::from_buf(&self.ibuf[..0xc].try_into().unwrap());
         if req.len as usize > BUF_LEN - 0xc {
             error!(target: "PPC", "Socket message exceeds BUF_LEN {BUF_LEN:x}");
-            panic!("Socket message exceeds BUF_LEN {BUF_LEN:x}");
+            anyhow::bail!("Socket message exceeds BUF_LEN {BUF_LEN:x}");
         }
-        Some(req)
+
+        // Only HostWrite includes inline payload bytes after the 12-byte header.
+        // For other commands, `len` is command metadata (e.g. read length), not
+        // socket payload size.
+        if let Command::HostWrite = req.cmd && req.len > 0 {
+            let payload_end = 0xc + req.len as usize;
+            if !Self::recv(client, &mut self.ibuf[0xc..payload_end])? {
+                anyhow::bail!("Socket closed while reading payload");
+            }
+        }
+
+        Ok(Some(req))
     }
 
     /// Read from physical memory.
@@ -315,7 +319,7 @@ impl PpcBackend {
         info!(target: "PPC", "read {:x} bytes at {:08x}", req.len, req.addr);
         self.bus.read().dma_read(req.addr,
             &mut self.obuf[0..req.len as usize])?;
-        let _ = client.write(&self.obuf[0..req.len as usize])?; // maybe FIXME: is it ok to ignore the # of bytes written here?
+        client.write_all(&self.obuf[0..req.len as usize])?;
         Ok(())
     }
 
@@ -324,7 +328,7 @@ impl PpcBackend {
         info!(target: "PPC", "write {:x} bytes at {:08x}", req.len, req.addr);
         let data = &self.ibuf[0xc..(0xc + req.len as usize)];
         self.bus.write().dma_write(req.addr, data)?;
-        let _ = client.write("OK".as_bytes())?; // maybe FIXME: is it ok to ignore the # of bytes written here?
+        client.write_all(b"OK")?;
         Ok(())
     }
 
@@ -335,7 +339,7 @@ impl PpcBackend {
         bus.hlwd.ipc.ppc_msg = req.addr;
         bus.hlwd.ipc.state.arm_req = true;
         bus.hlwd.ipc.state.arm_ack = true;
-        let _ = client.write("OK".as_bytes())?; // maybe FIXME: is it ok to ignore the # of bytes written here?
+        client.write_all(b"OK")?;
         Ok(())
     }
 
@@ -348,7 +352,7 @@ impl PpcBackend {
         let mut copy = vec![0u8; req.len as usize];
         if let Err(e) = bus.dma_read(req.addr, &mut copy) {
             error!(target: "RTPATCH", "Failed initial read of {:x} for runtime patch. {e:?}", req.addr);
-            client.write(&[0,0])?;
+            client.write_all(&[0,0])?;
             bail!(e);
         }
         use std::ops::Deref;
@@ -373,7 +377,7 @@ impl PpcBackend {
             current += 1;
         }
         info!(target: "RTPATCH", "Applied patch {} times", found);
-        let _ = client.write(&found.to_le_bytes())?;
+        client.write_all(&found.to_le_bytes())?;
         Ok(())
     }
 
@@ -425,7 +429,11 @@ impl Backend for PpcBackend {
 
             // If we successfully bind, run the server until it exits
             if sock.is_some() {
-                self.server_loop(sock.unwrap())?;
+                info!(target: "PPC", "Socket bound, starting PPC server");
+                match self.server_loop(sock.unwrap()) {
+                    Ok(()) => info!(target: "PPC", "PPC server terminated gracefully. Restarting socket"),
+                    Err(e) => error!(target: "PPC", "PPC server returned error: {e:?}"),
+                }
             }
         }
     }
