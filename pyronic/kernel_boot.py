@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 """ kernel_boot.py
 A bootloader for foreign (non-IOS) kernels, via IOSv58.
 For more details, see the repository at https://github.com/eigenform/mana

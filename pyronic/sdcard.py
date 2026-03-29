@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 from struct import pack, unpack
 from hexdump import hexdump

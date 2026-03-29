@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 """ es_gettitles_write.py
 Demonstrate a bug in ES_GetTitles() (for IOSv58) that can be used as an 8-byte 
 write-primitive on ARM-world, from unprivileged PPC-world.
