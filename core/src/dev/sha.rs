@@ -2,7 +2,7 @@
 pub mod util;
 
 use anyhow::bail;
-use log::{debug, trace, log_enabled};
+use log::{debug, trace, warn, log_enabled};
 
 use crate::bus::*;
 use crate::bus::prim::*;
@@ -94,7 +94,15 @@ impl Bus {
         let cmd = ShaCommand::from(val);
 
         let mut sha_buf = vec![0u8; cmd.len as usize];
-        self.dma_read(self.sha.src, &mut sha_buf)?;
+
+        // The hardware reads from the closest 64-byte boundary >= src.
+        // If it isnt, throw a warning and perform a DMA read from the next 64-byte aligned address.
+        let mut src = self.sha.src;
+        if (src & 0x3f) != 0 {
+            warn!(target: "SHA", "Unaligned SHA src address {:08x}; DMA will read from next 64-byte boundary", src);
+        }
+        src = (src + 0x3f) & !0x3f;
+        self.dma_read(src, &mut sha_buf)?;
         if log_enabled!(target: "SHA", log::Level::Trace) {
             let mut msg = format!("SHA DMA Buffer dump: {} bytes\n", sha_buf.len());
             for chunk in sha_buf.chunks(8) {
@@ -111,7 +119,7 @@ impl Bus {
 
         self.sha.state.update(&sha_buf);
 
-        debug!(target: "SHA", "SHA Digest addr={:08x} len={:08x}", self.sha.src, cmd.len);
+        debug!(target: "SHA", "SHA Digest addr={:08x} read_from={:08x} len={:08x}", self.sha.src, src, cmd.len);
         debug!(target: "SHA", "SHA buffer {:02x?}", self.sha.state.digest);
 
         // Mark the command as completed
