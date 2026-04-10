@@ -5,7 +5,7 @@ extern crate cbc;
 use aes::cipher::{block_padding::NoPadding, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use anyhow::{bail};
 use log::log_enabled;
-use log::{debug, trace};
+use log::{debug, warn, trace};
 
 type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
@@ -124,7 +124,12 @@ impl Bus {
 
         // Read data from the source address
         let mut aes_inbuf = vec![0u8; cmd.len];
-        self.dma_read(self.aes.src, &mut aes_inbuf)?;
+        let mut src = self.aes.src;
+        if (src & 0x3f) != 0 {
+            warn!(target: "AES", "Unaligned AES src address {:08x}; DMA will read from next 64-byte boundary", src);
+        }
+        src = (src + 0x3f) & !0x3f;
+        self.dma_read(src, &mut aes_inbuf)?;
         if log_enabled!(target: "AES", log::Level::Trace) {
             let mut msg = format!("AES DMA Buffer dump: {} bytes\n", aes_inbuf.len());
             for chunk in aes_inbuf.chunks(8) {
