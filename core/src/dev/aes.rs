@@ -125,10 +125,10 @@ impl Bus {
         // Read data from the source address
         let mut aes_inbuf = vec![0u8; cmd.len];
         let mut src = self.aes.src;
-        if (src & 0x3f) != 0 {
-            warn!(target: "AES", "Unaligned AES src address {:08x}; DMA will read from next 64-byte boundary", src);
+        if (src & 0x0f) != 0 {
+            warn!(target: "AES", "Unaligned AES src address {:08x}; DMA will read from next 16-byte boundary", src);
         }
-        src = (src + 0x3f) & !0x3f;
+        src = (src + 0x0f) & !0x0f;
         self.dma_read(src, &mut aes_inbuf)?;
         if log_enabled!(target: "AES", log::Level::Trace) {
             let mut msg = format!("AES DMA Buffer dump: {} bytes\n", aes_inbuf.len());
