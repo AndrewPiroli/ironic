@@ -12,8 +12,8 @@ use crate::bus::task::*;
 /// being kind of a mess in order to accomodate that.
 /// TODO: Clean up?
 /// Also, we begrudgingly need to emulate ARAM transfers here, since, even though ARAM physically
-/// doesn't exist in the Wii, some crappy software (_cough cough_ libogc _cough cough_) relies on
-/// ARAM transfers to claim to complete (even though they don't go anywhere), which technically
+/// doesn't exist in the Wii, some software relies on ARAM transfers to
+/// claim to complete (even though they don't go anywhere), which technically
 /// happens on real hardware,  even though it really shouldn't be relied on.....
 #[derive(Debug, Clone)]
 pub struct DigitalSignalProcessor {

@@ -746,7 +746,6 @@ int main(void) {
 	/* register load/store hook for watchpoints */
 	ppcemu_set_loadstore_hook(emu, loadstore_hook);
 
-	/* set cache mode to permissive, to work around libogc having crippling cache coherency issues */
 	ppcemu_set_cache_mode(emu, PPCEMU_CACHE_MODE_PERMISSIVE);
 
 	while (true) {
