@@ -190,7 +190,7 @@ impl PpcBackend {
                     Command::Message => {
                         self.handle_message(&mut client, req)?;
                         let armmsg = self.wait_for_resp();
-                        client.write_all(&u32::to_le_bytes(armmsg))?; // maybe FIXME: is it ok to ignore the # of bytes written here?
+                        client.write_all(&u32::to_le_bytes(armmsg))?;
                     },
                     Command::MessageNoReturn => {
                         self.handle_message(&mut client, req)?;

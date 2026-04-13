@@ -5,14 +5,14 @@ WRITE_LIMIT = 10000 - 12 # back/src/ppc.rs const BUF_LEN=100000 subtract message
 
 class IronicSocket(object):
     """ Representing some connection to the PPC HLE server. """
-    IRONIC_READ    = 1
-    IRONIC_WRITE   = 2
-    IRONIC_MSG     = 3
-    IRONIC_ACK     = 4
-    IRONIC_MSGNORET= 5
-    IRONIC_PATCH   = 14
+    IRONIC_READ        = 1
+    IRONIC_WRITE       = 2
+    IRONIC_MSG         = 3
+    IRONIC_ACK         = 4
+    IRONIC_MSGNORET    = 5
+    IRONIC_PATCH       = 14
     IRONIC_DISABLEPROT = 15
-    IRONIC_QUIT    = 255
+    IRONIC_QUIT        = 255
 
     def __init__(self, filename="/tmp/ironic-ppc.sock"):
         self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
