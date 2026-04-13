@@ -18,7 +18,8 @@ implementation since the beginning:
 - [x] Execution through IOS first-stage bootloader
 - [x] Execution through IOS second-stage bootloader
 - [x] Execution in the IOS kernel
-- [x] Broadway/PowerPC-world HLE 
+- [x] Broadway/PowerPC-world HLE
+- [x] Broadway LLE (Preview, No application support yet)
 - [x] Emulated SDHC (SD card) support. (Alpha quality ATM! Place sd image as "sd.img" to connect card)
 - [ ] Emulated USB support?
 - [ ] Emulated WLAN functionality?
