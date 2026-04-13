@@ -6,46 +6,82 @@ use crate::bus::mmio::*;
 use crate::bus::task::*;
 
 /// Legacy Video Interface
+///
 /// Yes, it sadly needs to support all of this weird incorrect-size access stuff,
 /// some software like CEIL1NG_CAT, other ppcskel-derived software, and everything
 /// built with PowerBlocks, relies on dumping a blob of 16-bit values into VI, and this
 /// technically works on real hardware.
+///
+/// https://www.gc-forever.com/yagcd/chap5.html#sec5.3
 #[derive(Default, Debug, Clone)]
 pub struct VideoInterface {
+    /// Virtical Timing Register
     pub vtr: u16,
+    /// Display Configuration Register
     pub dcr: u16,
+    /// Horizontal Timing 0
     pub htr0: u32,
+    /// Horizontal Timing 1
     pub htr1: u32,
+    /// Odd Field Vertical Timing Register
     pub vto: u32,
+    /// Even Field Vertical Timing Register
     pub vte: u32,
+    /// Odd Field Burst Blanking Interval Register
     pub bbei: u32,
+    /// Even Field Burst Blanking Interval Register
     pub bboi: u32,
+    /// Top Field Base Register (L) (External Framebuffer Half 1)
     pub tfbl: u32,
+    /// Top Field Base Register (R) (Only valid in 3D Mode)
     pub tfbr: u32,
+    /// Bottom Field Base Register (L) (External Framebuffer Half 2)
     pub bfbl: u32,
+    /// Bottom Field Base Register (R) (Only valid in 3D Mode)
     pub bfbr: u32,
+    /// current vertical Position (of raster beam)
     pub dpv: u16,
+    /// current horizontal Position (of raster beam) (?)
     pub dph: u16,
+    /// Display Interrupt 0
     pub di0: u32,
+    /// Display Interrupt 1
     pub di1: u32,
+    /// Display Interrupt 2
     pub di2: u32,
+    /// Display Interrupt 3
     pub di3: u32,
+    /// Display Latch Register 0
     pub dl0: u32,
+    /// /// Display Latch Register 1
     pub dl1: u32,
+    /// Scaling Width Register
     pub hsw: u16,
+    /// Horizontal Scaling Register
     pub hsr: u16,
+    /// Filter Coefficient Table 0 (AA)
     pub fct0: u32,
+    /// Filter Coefficient Table 1
     pub fct1: u32,
+    /// Filter Coefficient Table 2
     pub fct2: u32,
+    /// Filter Coefficient Table 3
     pub fct3: u32,
+    /// Filter Coefficient Table 4
     pub fct4: u32,
+    /// Filter Coefficient Table 5
     pub fct5: u32,
+    /// Filter Coefficient Table 6
     pub fct6: u32,
     pub unk_68: u32,
+    /// VI Clock Select Register
     pub viclk: u16,
+    /// VI DTV Status Register
     pub visel: u16,
     pub unk_70: u16,
+    /// Border HBE (Horizontal Blank End)
     pub hbe: u16,
+    /// Border HBS (Horizontal Blank Start)
     pub hbs: u16,
     pub unk_76: u16,
     pub unk_78: u32,
