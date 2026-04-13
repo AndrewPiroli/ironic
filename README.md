@@ -19,7 +19,7 @@ implementation since the beginning:
 - [x] Execution through IOS second-stage bootloader
 - [x] Execution in the IOS kernel
 - [x] Broadway/PowerPC-world HLE
-- [x] Broadway LLE (Preview, No application support yet)
+- [x] Broadway LLE (Preview, No application support yet) Provided by [libppcemu](https://github.com/techflashYT/libppcemu/).
 - [x] Emulated SDHC (SD card) support. (Alpha quality ATM! Place sd image as "sd.img" to connect card)
 - [ ] Emulated USB support?
 - [ ] Emulated WLAN functionality?
@@ -44,14 +44,14 @@ Rough matrix of what software versions get to what stages in the boot process
 | TODO: More results                   |             |             |           |                                                                                                                                                                    |
 
 ## Contributing
-I am not interested in accepting contributions to this project and I will 
-probably work on it alone; at least, for now. When I get around to deciding on 
-a license, it will probably be as permissive as possible.
+Contributions are welcome from all free persons. The original repo did not specify a license other than
+"as permissive as possible".
+
 
 ## Building
 I use Nightly by default, so you may have to do something like this:
 ```
-$ git clone https://github.com/eigenform/ironic && cd ironic/
+$ git clone https://github.com/AndrewPiroli/ironic && cd ironic/
 ...
 $ rustup toolchain install nightly
 $ rustup override set nightly
