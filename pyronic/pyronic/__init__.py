@@ -28,7 +28,10 @@ class MemHandle(object):
         self.paddr = paddr
         self.size = size
     def read(self, off=0, size=None):
-        return self.__sock.send_guestread(self.paddr, self.size)
+        if size == None:
+            size = self.size
+
+        return self.__sock.send_guestread(self.paddr + off, size)
     def read8(self, off=0):
         return self.__sock.send_ppc_read8(self.paddr + off)
     def read16(self, off=0):
@@ -37,7 +40,7 @@ class MemHandle(object):
         return self.__sock.send_ppc_read32(self.paddr + off)
     def write(self, buf, off=0):
         assert len(buf) <= self.size
-        self.__sock.send_guestwrite(self.paddr, buf)
+        self.__sock.send_guestwrite(self.paddr + off, buf)
         self.data_size = len(buf)
     def write8(self, data, off=0):
         return self.__sock.send_ppc_write8(self.paddr + off, data)
