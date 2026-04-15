@@ -8,6 +8,21 @@ class IOSErr(IntEnum):
     FS_ENOENT       = -106
     ES_EINVAL       = -1017
 
+class FS(IntEnum):
+    Format          = 0x01
+    GetStats        = 0x02
+    CreateDir       = 0x03
+    ReadDir         = 0x04
+    SetAttr         = 0x05
+    GetAttr         = 0x06
+    Delete          = 0x07
+    Rename          = 0x08
+    CreateFile      = 0x09
+    SetFileVerCtrl  = 0x0a
+    GetFileStats    = 0x0b
+    GetUsage        = 0x0c
+    Shutdown        = 0x0d
+    Unk             = 0x0e
 
 class ES(IntEnum):
     AddTicket       = 0x01
