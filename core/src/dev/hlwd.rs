@@ -289,7 +289,9 @@ impl MmioDevice for Hollywood {
             0x1e4           => self.io_str_ctrl1,
             0x1ec           => self.otp.cmd,
             0x1f0           => self.otp.out,
-            0x214           => 0x0000_0000,
+            // See https://wiibrew.org/wiki/Hollywood/Registers#HW_VERSION
+            // Valid retail values are 0x11 (Hollywood) and 0x21 (Bollywood)
+            0x214           => 0x11,
             _ => { bail!("Unimplemented Hollywood read at {off:x}"); },
         };
         Ok(BusPacket::Word(val))
