@@ -15,6 +15,8 @@ print(f"fs fd: {fs}")
 
 file = ipc.IOSOpen(argv[2], 1)
 print(f"file fd={file}")
+if file == -102:
+    print("EACCESS: Permission denied. Apply the ISFS_Permissions patch to bypass this")
 if file >= 0:
     print("File already exists, deleting it first...")
     ipc.IOSClose(file)

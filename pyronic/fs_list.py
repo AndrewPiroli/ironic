@@ -23,7 +23,9 @@ retnames = ipc.alloc_raw(13 * MAX_FILES)
 retcnt = ipc.alloc_raw(4)
 res = ipc.IOSIoctlv(fs, FS.ReadDir, "dd:dd", name, maxcnt, retnames, retcnt)
 print(f"res={res}")
-if res == 0:
+if res == -102:
+    print("EACCES: Permission Denied. Apply the ISFS_Permissions patch to bypass this")
+elif res == 0:
     retcntVal = unpack(">L", retcnt.read(0, 4))[0]
     print("Number of files:", retcntVal)
     print("Files:")

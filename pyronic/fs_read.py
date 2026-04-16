@@ -13,6 +13,8 @@ ipc = IPCClient()
 
 file = ipc.IOSOpen(argv[1], 1)
 print(f"fd={file}")
+if file == -102:
+    print("EACCESS: Permission denied. Apply the ISFS_Permissions patch to bypass this")
 if file < 0:
     print(f"failed to open {argv[1]}")
     ipc.shutdown()
