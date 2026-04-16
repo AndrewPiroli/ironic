@@ -12,11 +12,11 @@ print(f"fd={slot0}")
 
 buf = ipc.alloc_raw(4)
 res = ipc.IOSIoctl(slot0, SDIO.ResetCard, ipc.alloc_raw(1), buf)
-res = buf.read(4)
+res = buf.read()
 hexdump(res)
 #print(f"{res=}")
 res = ipc.IOSIoctl(slot0, SDIO.GetStatus, ipc.alloc_raw(1), buf)
-res = buf.read(4)
+res = buf.read()
 hexdump(res[:4])
 #print(f"{res=}")
 

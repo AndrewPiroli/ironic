@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 from struct import pack, unpack
 from hexdump import hexdump
@@ -27,7 +27,7 @@ if res < 0:
     ipc.shutdown()
     exit(0)
 
-num_views = unpack(">I", num_views_ptr.read(off=0, size=4))[0]
+num_views = unpack(">I", num_views_ptr.read(4))[0]
 
 SIZEOF_TIKVIEW = 0xd8
 tikviews = ipc.alloc_raw(num_views * SIZEOF_TIKVIEW)

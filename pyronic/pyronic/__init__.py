@@ -27,7 +27,7 @@ class MemHandle(object):
         self.__sock = sock
         self.paddr = paddr
         self.size = size
-    def read(self, off=0, size=None):
+    def read(self, size=None, off=0):
         if size == None:
             size = self.size
 

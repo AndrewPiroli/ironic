@@ -51,7 +51,7 @@ if remainder:
 host_file = open(basename(argv[1]), "wb")
 
 for i in range(chunks):
-    data = filebuf.read(i * 4096, 4096)
+    data = filebuf.read(4096, i * 4096)
     host_file.write(data)
 
 host_file.close()

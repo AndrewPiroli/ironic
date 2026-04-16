@@ -26,12 +26,12 @@ print(f"res={res}")
 if res == -102:
     print("EACCES: Permission Denied. Apply the ISFS_Permissions patch to bypass this")
 elif res == 0:
-    retcntVal = unpack(">L", retcnt.read(0, 4))[0]
+    retcntVal = unpack(">L", retcnt.read(4, 0))[0]
     print("Number of files:", retcntVal)
     print("Files:")
     off = 0
     for fileIdx in range(retcntVal):
-        fnameRaw = retnames.read(off, 13)
+        fnameRaw = retnames.read(13, off)
         fnameLen = 0
         for b in fnameRaw:
             if b == 0:
