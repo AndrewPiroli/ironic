@@ -19,8 +19,8 @@ pub struct MailboxState {
 impl MailboxState {
     /// Write handler for PPC_CTRL
     pub fn ppc_ctrl_write(&mut self, x: u32) {
-        self.arm_req = x & 0x0000_0001 != 0;
-        self.arm_ack = x & 0x0000_0008 != 0;
+        if x & 0x0000_0001 != 0 { self.arm_req = true; }
+        if x & 0x0000_0008 != 0 { self.arm_ack = true; }
         if x & 0x0000_0002 != 0 { self.ppc_ack = false; }
         if x & 0x0000_0004 != 0 { self.ppc_req = false; }
         self.ppc_req_int = x & 0x0000_0010 != 0;
@@ -30,8 +30,8 @@ impl MailboxState {
 
     /// Write handler for ARM_CTRL
     pub fn arm_ctrl_write(&mut self, x: u32) {
-        self.ppc_req = x & 0x0000_0001 != 0;
-        self.ppc_ack = x & 0x0000_0008 != 0;
+        if x & 0x0000_0001 != 0 { self.ppc_req = true; }
+        if x & 0x0000_0008 != 0 { self.ppc_ack = true; }
         if x & 0x0000_0002 != 0 { self.arm_ack = false; }
         if x & 0x0000_0004 != 0 { self.arm_req = false; }
         self.arm_req_int = x & 0x0000_0010 != 0;
@@ -128,4 +128,3 @@ impl IpcInterface {
         Ok(())
     }
 }
-
