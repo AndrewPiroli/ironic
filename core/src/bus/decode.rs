@@ -120,16 +120,16 @@ impl Bus {
 fn resolve_rom_nomir(addr: u32) -> Option<DeviceHandle> {
     use MemDevice::*;
     match addr {
-        0x0d40_0000..=0x0d40_ffff | 0xfff0_0000..=0xfff0_ffff => 
+        0x0d40_0000..=0x0d40_ffff |
+        0xfff0_0000..=0xfff0_ffff |
+        0xfffe_0000..=0xfffe_ffff =>
             Some(DeviceHandle { dev: Device::Mem(Sram0), mask: 0x0000_ffff }),
 
-        // The top half of this is just garbage?
-        0x0d41_0000..=0x0d41_ffff | 0xfff1_0000..=0xfff1_ffff =>
-            Some(DeviceHandle { dev: Device::Mem(Sram1), mask: 0x0000_ffff }),
+        0x0d41_0000..=0x0d41_7fff |
+        0xfff1_0000..=0xfff1_7fff =>
+            Some(DeviceHandle { dev: Device::Mem(Sram1), mask: 0x0000_7fff }),
 
-        0xfffe_0000..=0xfffe_ffff => 
-            Some(DeviceHandle { dev: Device::Mem(Sram0), mask: 0x0000_ffff }),
-        0xffff_0000..=0xffff_1fff => 
+        0xffff_0000..=0xffff_1fff =>
             Some(DeviceHandle { dev: Device::Mem(MaskRom), mask: 0x0000_1fff }),
         _ => None,
     }
@@ -138,11 +138,11 @@ fn resolve_rom_nomir(addr: u32) -> Option<DeviceHandle> {
 fn resolve_rom_mir(addr: u32) -> Option<DeviceHandle> {
     use MemDevice::*;
     match addr {
-        0x0d40_0000..=0x0d41_7fff | 0xfff0_0000..=0xfff1_ffff =>
+        0x0d40_0000..=0x0d41_ffff |
+        0xfff0_0000..=0xfff1_ffff |
+        0xfffe_0000..=0xfffe_ffff =>
             Some(DeviceHandle { dev: Device::Mem(MaskRom), mask: 0x0000_1fff }),
-        0xfffe_0000..=0xfffe_ffff => 
-            Some(DeviceHandle { dev: Device::Mem(MaskRom), mask: 0x0000_1fff }),
-        0xffff_0000..=0xffff_ffff => 
+        0xffff_0000..=0xffff_ffff =>
             Some(DeviceHandle { dev: Device::Mem(Sram0), mask: 0x0000_ffff }),
         _ => None,
     }
@@ -151,19 +151,14 @@ fn resolve_rom_mir(addr: u32) -> Option<DeviceHandle> {
 fn resolve_norom_mir(addr: u32) -> Option<DeviceHandle> {
     use MemDevice::*;
     match addr {
+        0x0d40_0000..=0x0d40_7fff |
+        0xfff0_0000..=0xfff0_7fff |
+        0xfffe_0000..=0xfffe_7fff =>
+            Some(DeviceHandle { dev: Device::Mem(Sram1), mask: 0x0000_7fff }),
 
-        // Top half is garbage?
-        0x0d40_0000..=0x0d40_ffff | 0xfff0_0000..=0xfff0_ffff => 
-            Some(DeviceHandle { dev: Device::Mem(Sram1), mask: 0x0000_ffff }),
-
-        0x0d41_0000..=0x0d41_ffff | 0xfff1_0000..=0xfff1_ffff => 
-            Some(DeviceHandle { dev: Device::Mem(Sram1), mask: 0x0000_ffff }),
-
-        // Top half is garbage?
-        0xfffe_0000..=0xfffe_ffff => 
-            Some(DeviceHandle { dev: Device::Mem(Sram1), mask: 0x0000_ffff }),
-
-        0xffff_0000..=0xffff_ffff => 
+        0x0d41_0000..=0x0d41_ffff |
+        0xfff1_0000..=0xfff1_ffff |
+        0xffff_0000..=0xffff_ffff =>
             Some(DeviceHandle { dev: Device::Mem(Sram0), mask: 0x0000_ffff }),
         _ => None,
     }
@@ -173,20 +168,16 @@ fn resolve_norom_nomir(addr: u32) -> Option<DeviceHandle> {
     use MemDevice::*;
     match addr {
 
-        0x0d40_0000..=0x0d40_ffff | 0xfff0_0000..=0xfff0_ffff => 
+        0x0d40_0000..=0x0d40_ffff |
+        0xfff0_0000..=0xfff0_ffff |
+        0xfffe_0000..=0xfffe_ffff =>
             Some(DeviceHandle { dev: Device::Mem(Sram0), mask: 0x0000_ffff }),
 
-        // Top half is garbage?
-        0x0d41_0000..=0x0d41_ffff | 0xfff1_0000..=0xfff1_ffff => 
-            Some(DeviceHandle { dev: Device::Mem(Sram1), mask: 0x0000_ffff }),
+        0x0d41_0000..=0x0d41_7fff |
+        0xfff1_0000..=0xfff1_7fff |
+        0xffff_0000..=0xffff_7fff =>
+            Some(DeviceHandle { dev: Device::Mem(Sram1), mask: 0x0000_7fff }),
 
-        0xfffe_0000..=0xfffe_ffff => 
-            Some(DeviceHandle { dev: Device::Mem(Sram0), mask: 0x0000_ffff }),
-
-        // Top half is garbage?
-        0xffff_0000..=0xffff_ffff => 
-            Some(DeviceHandle { dev: Device::Mem(Sram1), mask: 0x0000_ffff }),
         _ => None,
     }
 }
-
