@@ -54,7 +54,7 @@ pub struct BigEndianMemory {
     /// Vector of bytes with the contents of this memory device.
     pub data: BackingMem,
     /// Hash of initial data (used for write tracking)
-    hash: u32,
+    hash: Option<u32>,
     /// Holds all writes so they can be replayed next time the emulator launches
     writes: Option<IntervalMap<usize, Vec<u8>>>,
     /// write_index
@@ -62,27 +62,34 @@ pub struct BigEndianMemory {
     already_wrote: AtomicBool,
 }
 impl BigEndianMemory {
-    pub fn new(len: usize, init_fn: Option<&str>, track_writes: bool) -> anyhow::Result<Self> {
-        let hash: u32;
+    pub fn new(len: usize, init_fn: Option<&str>, mut track_writes: bool) -> anyhow::Result<Self> {
+        let mut hash: Option<u32> = None;
         let data = if let Some(filename) = init_fn { unsafe {
             let mut f = File::open(filename)?;
             if let Ok(map) = MmapOptions::new().map_copy(&f) {
-                hash = crc32fast::hash(&*map);
+                if track_writes {
+                    hash = Some(crc32fast::hash(&*map));
+                }
                 BackingMem::Mapped(map)
             }
             else {
                 error!(target: "Other", "mmaping {filename} failed, falling back to copy");
                 let mut data = vec![0u8; len];
                 let _ = f.read(&mut data)?; // ignore partial read
-                hash = crc32fast::hash(&data);
+                if track_writes {
+                    hash = Some(crc32fast::hash(&data));
+                }
                 BackingMem::Local(data)
             }
         }} else {
-            hash = 0xDEADC0DE;
+            if track_writes {
+                error!(target: "MEMSAVE", "Requested write tracking on anonymous memory");
+                track_writes = false;
+            }
             BackingMem::Local(vec![0u8; len])
         };
         let writes: Option<IntervalMap<usize, Vec<u8>>> = if track_writes {
-            debug!(target: "MEMSAVE", "BEMemory: Writes Enabled, hash: {hash}");
+            debug!(target: "MEMSAVE", "BEMemory: Writes Enabled, hash: {}", hash.unwrap());
             Some(IntervalMap::new())
         }
         else {
@@ -90,7 +97,7 @@ impl BigEndianMemory {
         };
         let mut res = BigEndianMemory { data, hash, writes, write_index: 0, already_wrote: AtomicBool::new(true)};
         if track_writes {
-            if let Ok((write_index, mpfs)) = BigEndianMemory::get_patchfiles(hash) {
+            if let Ok((write_index, mpfs)) = BigEndianMemory::get_patchfiles(hash.unwrap()) {
                 res.write_index = write_index.checked_add(1).unwrap();
                 for mpf in mpfs {
                     res.patch(mpf)?;
@@ -152,7 +159,7 @@ impl BigEndianMemory {
     }
 
     fn patch(&mut self, patchfile: MemoryPatchFile) -> anyhow::Result<()> {
-        if self.hash != patchfile.hash {
+        if self.hash.unwrap() != patchfile.hash {
             bail!("Mismatched patch file!");
         }
         let temp = std::mem::take(&mut self.writes); // Or else the subsequent calls to write_buf will double-count these writes.
@@ -168,6 +175,7 @@ impl BigEndianMemory {
         if self.writes.is_none() {
             bail!("dump_writes but writes not enabled!");
         }
+        let hash = self.hash.unwrap();
         if self.already_wrote.load(Relaxed) {
             debug!(target: "MEMSAVE", "dump_writes but already wrote the latest changes!");
             return Ok(());
@@ -177,11 +185,11 @@ impl BigEndianMemory {
             MemoryPatch { offset: x.0.start, data: x.1.clone() }
         }).collect();
         let mut mpf = MemoryPatchFile {
-            hash: self.hash,
+            hash,
             ranges: patches,
         };
         mpf.merge_adjacent_ranges();
-        mpf.to_file(format!("./saved-writes/{}/{}", self.hash, self.write_index).into())?;
+        mpf.to_file(format!("./saved-writes/{hash}/{}", self.write_index).into())?;
         Ok(())
     }
 }
