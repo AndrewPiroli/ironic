@@ -4,6 +4,10 @@ pub mod prim;
 
 use crate::cpu::mmu::prim::*;
 use crate::cpu::Cpu;
+use crate::bus::Bus;
+
+use parking_lot::RawRwLock;
+use parking_lot::lock_api::RwLockReadGuard;
 
 use anyhow::{bail, Context};
 
@@ -52,13 +56,13 @@ impl Cpu {
     }
 
     /// Resolve a page table descriptor, returning a physical address.
-    fn resolve_page_table(&self, req: TLBReq, d: L1Descriptor) -> anyhow::Result<u32> {
+    fn resolve_page_table(&self, req: TLBReq, d: L1Descriptor, bus: &RwLockReadGuard<'_, RawRwLock, Bus>) -> anyhow::Result<u32> {
         let domain = match d {
             L1Descriptor::Coarse(ref e) => e.domain(),
             L1Descriptor::Fine(ref e)   => e.domain(),
             _ => bail!("resolve_page_table: expected Coarse or Fine descriptor"),
         };
-        let desc = match self.l2_fetch(req.vaddr, d) {
+        let desc = match self.l2_fetch(req.vaddr, d, bus) {
             Ok(val) => val,
             Err(reason) => return Err(reason),
         };
@@ -86,9 +90,9 @@ impl Cpu {
     }
 
     /// Given some virtual address, return the first-level PTE.
-    fn l1_fetch(&self, vaddr: VirtAddr) -> anyhow::Result<L1Descriptor> {
+    fn l1_fetch(&self, vaddr: VirtAddr, bus: &RwLockReadGuard<'_, RawRwLock, Bus>) -> anyhow::Result<L1Descriptor> {
         let addr = (self.p15.read_ttbr() & 0xffff_c000) | vaddr.l1_idx() << 2;
-        let val = self.p15.l1_fetch(addr, &self.bus)?;
+        let val = self.p15.l1_fetch(addr, bus)?;
 
         let res = L1Descriptor::from_u32(val);
         if let L1Descriptor::Fault(_) = res {
@@ -100,7 +104,7 @@ impl Cpu {
 
     /// Given some virtual address and a particular first-level PTE, return
     /// the second-level PTE.
-    fn l2_fetch(&self, vaddr: VirtAddr, d: L1Descriptor) -> anyhow::Result<L2Descriptor> {
+    fn l2_fetch(&self, vaddr: VirtAddr, d: L1Descriptor, bus: &RwLockReadGuard<'_, RawRwLock, Bus>) -> anyhow::Result<L2Descriptor> {
         let addr = match d {
             L1Descriptor::Coarse(e) => {
                 e.base_addr() | (vaddr.l2_idx_coarse() << 2)
@@ -110,7 +114,7 @@ impl Cpu {
             }
             _ => bail!("l2_fetch requires an L1::Coarse or L1::Fine descriptor"),
         };
-        let val = self.bus.read().read32(addr)?;
+        let val = bus.read32(addr)?;
 
         L2Descriptor::from_u32_checked(val).with_context(|| format!("l2_fetch: VirtualAddr: 0x{:x} L1Descriptor: {d:?}", vaddr.0))
     }
@@ -118,10 +122,11 @@ impl Cpu {
     /// Translate a virtual address into a physical address.
     pub fn translate(&self, req: TLBReq) -> anyhow::Result<u32> {
         if self.p15.c1_ctrl.mmu_enabled() {
-            match self.l1_fetch(req.vaddr)? {
+            let bus = self.bus.read();
+            match self.l1_fetch(req.vaddr, &bus)? {
                 L1Descriptor::Section(entry) => Ok(self.resolve_section(req, entry)?),
-                L1Descriptor::Coarse(entry) => self.resolve_page_table(req, L1Descriptor::Coarse(entry)),
-                L1Descriptor::Fine(entry) => self.resolve_page_table(req, L1Descriptor::Fine(entry)),
+                L1Descriptor::Coarse(entry) => self.resolve_page_table(req, L1Descriptor::Coarse(entry), &bus),
+                L1Descriptor::Fine(entry) => self.resolve_page_table(req, L1Descriptor::Fine(entry), &bus),
                 other => bail!("TLB first-level descriptor {other:?} unimplemented"),
             }
         } else {

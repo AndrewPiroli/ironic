@@ -1,7 +1,8 @@
 //! Coprocessor register definitions and functionality.
 
-use std::{cell::RefCell, collections::HashMap, sync::Arc, hash::BuildHasherDefault};
-use parking_lot::RwLock;
+use std::{cell::RefCell, collections::HashMap, hash::BuildHasherDefault};
+use parking_lot::RawRwLock;
+use parking_lot::lock_api::RwLockReadGuard;
 
 use crate::bus::Bus;
 use fxhash::FxHasher32;
@@ -244,12 +245,12 @@ impl SystemControl {
 
     /// Perform the actual L1 lookup
     /// Technically this is an MMU operation, but having it here is easier for now.
-    pub fn l1_fetch(&self, addr: u32, bus: &Arc<RwLock<Bus>>) -> anyhow::Result<u32> {
+    pub fn l1_fetch(&self, addr: u32, bus: &RwLockReadGuard<'_, RawRwLock, Bus>) -> anyhow::Result<u32> {
         let mut tlb_inner = self.l1_tlb.borrow_mut();
         let val = match tlb_inner.get(&addr) {
             Some(val) => *val, // TLB hit
             None => { // miss
-                let val = bus.read().read32(addr)?;
+                let val = bus.read32(addr)?;
                 tlb_inner.insert(addr, val);
                 val
             },
