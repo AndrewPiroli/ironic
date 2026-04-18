@@ -178,23 +178,27 @@ impl InterpBackend {
     /// Write semihosting debug strings to stdout.
     pub fn svc_read(&mut self) -> anyhow::Result<()> {
         use ironic_core::cpu::mmu::prim::{TLBReq, Access};
-
-        // On the SVC calls, r1 should contain a pointer to some buffer.
-        // They might be virtual addresses, so we need to do an out-of-band
-        // request to MMU code in order to resolve the actual location.
-        let paddr = match self.cpu.translate(
-            TLBReq::new(self.cpu.reg.r[1], Access::Debug)
-        ) {
-            Ok(val) => val,
-            Err(reason) => return Err(reason),
-        };
-
-        // Pull the buffer out of guest memory
-        // Official code only sends 15 chars + null byte at a time
-        // Probably a limitation of their early semihosting hardware
-        // We buffer that internally until we see a newline, that's our cue to print
         let mut line_buf = [0u8; 16];
-        self.bus.read().dma_read(paddr, &mut line_buf)?;
+        {
+            let bus = self.bus.read();
+            // On the SVC calls, r1 should contain a pointer to some buffer.
+            // They might be virtual addresses, so we need to do an out-of-band
+            // request to MMU code in order to resolve the actual location.
+            let paddr = match self.cpu.translate_with_bus(
+                TLBReq::new(self.cpu.reg.r[1], Access::Debug),
+                &bus
+            ) {
+                Ok(val) => val,
+                Err(reason) => return Err(reason),
+            };
+
+            // Pull the buffer out of guest memory
+            // Official code only sends 15 chars + null byte at a time
+            // Probably a limitation of their early semihosting hardware
+            // We buffer that internally until we see a newline, that's our cue to print
+
+            bus.dma_read(paddr, &mut line_buf)?;
+        }
 
         let s = std::str::from_utf8(&line_buf)?
             .trim_matches(char::from(0));
@@ -260,7 +264,7 @@ impl InterpBackend {
             };
             if let Some(vaddr) = vaddr {
                 let paddr = self.cpu.translate(
-                    TLBReq::new(vaddr, Access::Debug)
+                    TLBReq::new(vaddr, Access::Debug),
                 )?;
                 info!(target: "Other", "DBG hotpatching module entrypoint {paddr:08x}");
                 info!(target: "Other", "{:?}", self.cpu.reg);

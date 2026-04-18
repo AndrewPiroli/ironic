@@ -7,7 +7,7 @@ use crate::cpu::Cpu;
 use crate::bus::Bus;
 
 use parking_lot::RawRwLock;
-use parking_lot::lock_api::RwLockReadGuard;
+use parking_lot::lock_api::{RwLockReadGuard, RwLockWriteGuard};
 
 use anyhow::{bail, Context};
 
@@ -18,14 +18,29 @@ impl Cpu {
         let res = self.bus.read().read32(paddr)?;
         Ok(res)
     }
+    pub fn read32_with_bus(&self, addr: u32, bus: &RwLockReadGuard<'_, RawRwLock, Bus>) -> anyhow::Result<u32> {
+        let paddr = self.translate_with_bus(TLBReq::new(addr, Access::Read), &bus)?;
+        let res = bus.read32(paddr)?;
+        Ok(res)
+    }
     pub fn read16(&self, addr: u32) -> anyhow::Result<u16> {
         let paddr = self.translate(TLBReq::new(addr, Access::Read))?;
         let res = self.bus.read().read16(paddr)?;
         Ok(res)
     }
+    pub fn read16_with_bus(&self, addr: u32, bus: &RwLockReadGuard<'_, RawRwLock, Bus>) -> anyhow::Result<u16> {
+        let paddr = self.translate_with_bus(TLBReq::new(addr, Access::Read), &bus)?;
+        let res = bus.read16(paddr)?;
+        Ok(res)
+    }
     pub fn read8(&self, addr: u32) -> anyhow::Result<u8> {
         let paddr = self.translate(TLBReq::new(addr, Access::Read))?;
         let res = self.bus.read().read8(paddr)?;
+        Ok(res)
+    }
+    pub fn read8_with_bus(&self, addr: u32, bus: &RwLockReadGuard<'_, RawRwLock, Bus>) -> anyhow::Result<u8> {
+        let paddr = self.translate_with_bus(TLBReq::new(addr, Access::Read), &bus)?;
+        let res = bus.read8(paddr)?;
         Ok(res)
     }
 
@@ -119,10 +134,15 @@ impl Cpu {
         L2Descriptor::from_u32_checked(val).with_context(|| format!("l2_fetch: VirtualAddr: 0x{:x} L1Descriptor: {d:?}", vaddr.0))
     }
 
-    /// Translate a virtual address into a physical address.
+    /// Translate a virtual address into a physical address
     pub fn translate(&self, req: TLBReq) -> anyhow::Result<u32> {
+        let bus = self.bus.read();
+        self.translate_with_bus(req, &bus)
+    }
+
+    /// Translate a virtual address into a physical address using an existing bus lock
+    pub fn translate_with_bus(&self, req: TLBReq, bus: &RwLockReadGuard<'_, RawRwLock, Bus>) -> anyhow::Result<u32> {
         if self.p15.c1_ctrl.mmu_enabled() {
-            let bus = self.bus.read();
             match self.l1_fetch(req.vaddr, &bus)? {
                 L1Descriptor::Section(entry) => Ok(self.resolve_section(req, entry)?),
                 L1Descriptor::Coarse(entry) => self.resolve_page_table(req, L1Descriptor::Coarse(entry), &bus),

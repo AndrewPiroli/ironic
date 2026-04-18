@@ -67,10 +67,13 @@ macro_rules! scdef {
 /// 
 /// NOTE: This is not particularly rigorous or safe.
 pub fn read_string(cpu: &Cpu, ptr: u32) -> anyhow::Result<String> {
-    let paddr = cpu.translate(TLBReq::new(ptr, Access::Debug))?;
-
     let mut line_buf = [0u8; 64];
-    cpu.bus.read().dma_read(paddr, &mut line_buf)?;
+    {
+        let bus = cpu.bus.read();
+        let paddr = cpu.translate_with_bus(TLBReq::new(ptr, Access::Debug), &bus)?;
+
+        bus.dma_read(paddr, &mut line_buf)?;
+    }
     if log_enabled!(target: "SYSCALL", log::Level::Trace) {
         let mut msg = String::new();
         for chunk in line_buf.chunks_exact(8) {
