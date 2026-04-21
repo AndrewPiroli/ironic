@@ -53,6 +53,12 @@ pub enum ParseError {
     NotImplemented,
 }
 
+impl Default for File {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl File {
     pub fn open_path<T: AsRef<Path>>(path: T) -> Result<File, ParseError> {
         // Open the file for reading
