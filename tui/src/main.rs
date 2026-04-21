@@ -92,6 +92,7 @@ fn main() -> anyhow::Result<()> {
                 let lr = bus.debuginfo.last_lr.unwrap();
                 let _sp = bus.debuginfo.last_sp.unwrap();
                 if let Some(ref debuginfo) = bus.debuginfo.debuginfo {
+                    #[allow(deprecated)] // God these 2 crates are stupid
                     let debuginfo_b = debuginfo.borrow(|section|{
                         EndianSlice::new(section, BigEndian)
                     });
@@ -169,7 +170,7 @@ fn main() -> anyhow::Result<()> {
 
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::AsRefStr, strum::Display, strum::EnumVariantNames, strum::EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::AsRefStr, strum::Display, strum::VariantNames, strum::EnumString)]
 #[strum(ascii_case_insensitive)]
 #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
 enum LogTarget {

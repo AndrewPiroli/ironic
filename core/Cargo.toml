@@ -7,15 +7,15 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-cbc = { version = "0.1.2", features = ["block-padding", "std"] }
-aes = "0.8.2"
-anyhow = { version = "1.0.70", features = ["std", "backtrace"] }
-fxhash = "0.2.1"
-log = { version = "0.4.17", default-features = false, features = ["std"] }
-gimli = "~0.27.2"
-crc32fast = { version = "~1.4.0", default-features = false, features = ["std", "nightly"] }
-bincode = { version = "~2.0.0-rc.3" }
-lz4_flex = { version = "~0.11.1", default-features = false, features = ["std", "safe-encode", "safe-decode", "frame"] }
-iset = { version = "~0.2.2", default-features = false }
-parking_lot = { version = "~0.12.1", default-features = false, features = ["nightly", "hardware-lock-elision"] }
-memmap = { package = "memmap2", version = "0.9.4" }
+cbc = { version = "~0.2.0", features = ["block-padding", "alloc"] }
+aes = "~0.9.0"
+anyhow = { version = "~1.0.102", features = ["std", "backtrace"] }
+fxhash = "=0.2.1"
+log = { version = "~0.4.29", default-features = false, features = ["std"] }
+gimli = "~0.33.0"
+crc32fast = { version = "~1.5.0", default-features = false, features = ["std", "nightly"] }
+bincode = { version = "=2.0.1" }
+lz4_flex = { version = "~0.13.0", default-features = false, features = ["std", "safe-encode", "safe-decode", "frame"] }
+iset = { version = "~0.3.1", default-features = false }
+parking_lot = { version = "~0.12.5", default-features = false, features = ["nightly", "hardware-lock-elision"] }
+memmap = { package = "memmap2", version = "~0.9.10" }

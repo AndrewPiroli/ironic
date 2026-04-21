@@ -10,12 +10,12 @@ edition = "2024"
 ironic-core = { path = "../core" }
 ironic-backend = { path = "../back" }
 
-clap = { version = "4.2.1", features = ["std", "derive", "suggestions", "color", "wrap_help"]}
-anyhow = { version = "1.0.40", features = ["std", "backtrace"] }
-log = { version = "0.4.17", default-features = false, features = ["std"] }
-fern = { version = "0.6.2", features = ["colored"] }
-strum = { version = "~0.25", features = ["derive"] }
-addr2line = { version = "~0.20.0", default-features = false, features = ["std"] }
-gimli = "~0.27.2"
-ctrlc = { version = "3.4.0", features = ["termination"] }
-parking_lot = { version = "~0.12.1", default-features = false, features = ["nightly", "hardware-lock-elision"] }
+clap = { version = "~4.6.1", features = ["std", "derive", "suggestions", "color", "wrap_help"]}
+anyhow = { version = "~1.0.102", features = ["std", "backtrace"] }
+log = { version = "~0.4.29", default-features = false, features = ["std"] }
+fern = { version = "~0.7.1", features = ["colored"] }
+strum = { version = "~0.28.0", features = ["derive"] }
+addr2line = { version = "~0.26.1", default-features = false, features = ["std"] }
+gimli = "~0.33.0"
+ctrlc = { version = "~3.4.0", features = ["termination"] }
+parking_lot = { version = "~0.12.5", default-features = false, features = ["nightly", "hardware-lock-elision"] }

@@ -2,7 +2,8 @@
 extern crate aes;
 extern crate cbc;
 
-use aes::cipher::{block_padding::NoPadding, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt};
+use aes::cipher::{block_padding::NoPadding, KeyIvInit};
 use anyhow::{bail};
 use log::log_enabled;
 use log::{debug, warn, trace};
@@ -162,11 +163,11 @@ impl Bus {
             let aes_outbuf = match cmd.decrypt {
                 true => {
                     let cipher_dec = Aes128CbcDec::new_from_slices(key, &iv).unwrap();
-                    cipher_dec.decrypt_padded_vec_mut::<NoPadding>(&aes_inbuf).unwrap()
+                    cipher_dec.decrypt_padded_vec::<NoPadding>(&aes_inbuf).unwrap()
                 },
                 false => {
                     let cipher_enc = Aes128CbcEnc::new_from_slices(key, &iv).unwrap();
-                    cipher_enc.encrypt_padded_vec_mut::<NoPadding>(&aes_inbuf)
+                    cipher_enc.encrypt_padded_vec::<NoPadding>(&aes_inbuf)
                 },
             };
 
