@@ -14,4 +14,4 @@ edition = "2024"
 name = "elf"
 
 [dependencies]
-thiserror = "~1.0.40"
+thiserror = "~2.0.18"
