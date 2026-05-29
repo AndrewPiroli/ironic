@@ -113,11 +113,11 @@ impl BigEndianMemory {
         let dir = match std::fs::read_dir(format!("./saved-writes/{hash}/")) {
             Ok(dir) => dir,
             Err(err) => {
-                // handle no directory by creating it and trying again
                 match err.raw_os_error() {
+                    // Handle no directory by creating it.
                     Some(2) => {
                         std::fs::create_dir_all(format!("./saved-writes/{hash}/"))?;
-                        std::fs::read_dir(format!("./saved-writes/{hash}/"))?
+                        return Ok((0, Vec::with_capacity(0)));
                     },
                     Some(_) | None => { return Err(err).context(format!("Failed to open directory ./saved-writes/{hash}/ for get_patchfiles")) }
                 }
