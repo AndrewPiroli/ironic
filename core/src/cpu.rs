@@ -35,8 +35,6 @@ pub struct Cpu {
     pub current_exception: Option<ExceptionType>,
 
     pub scratch: u32,
-    /// Flag that marks if a double wide thumb instruction is in progress, for masking interrupts.
-    pub dispatching_double_wide_instr: bool,
     pub dbg_on: bool,
 
     /// Whether or not an interrupt request is currently asserted.
@@ -49,7 +47,6 @@ impl Cpu {
             reg: reg::RegisterFile::new(),
             p15: coproc::SystemControl::new(),
             scratch: 0,
-            dispatching_double_wide_instr: false,
             irq_input: false,
             current_exception: None,
             dbg_on: false,
