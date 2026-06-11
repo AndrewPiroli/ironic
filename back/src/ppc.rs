@@ -43,6 +43,7 @@ pub enum Command {
     FlipperIrq,
     PatchRange,
     DisableProtections,
+    PollFlipperIrq,
     Shutdown,
     Unimpl,
 }
@@ -64,6 +65,7 @@ impl Command {
             13 => Self::FlipperIrq,
             14 => Self::PatchRange,
             15 => Self::DisableProtections,
+            16 => Self::PollFlipperIrq,
             255 => Self::Shutdown,
             _ => Self::Unimpl,
         }
@@ -207,6 +209,7 @@ impl PpcBackend {
                 // command, so the EnableFlipperIrqForwarding response
                 // itself doesn't get the extra byte.
                 let was_forwarding = self.forward_irqs;
+                let is_irq_poll = matches!(req.cmd, Command::PollFlipperIrq);
 
                 match req.cmd {
                     Command::Ack => self.handle_ack(req)?,
@@ -236,6 +239,10 @@ impl PpcBackend {
                         log::info!(target: "RTPATCH", "AHBPROT and SRNPROT protections disabled");
                         client.write_all(b"OK")?;
                     }
+                    Command::PollFlipperIrq => {
+                        let flag = self.take_irq_flag();
+                        client.write_all(&[flag])?;
+                    }
                     Command::Shutdown => {
                         client.write_all(b"kk")?;
                         break;
@@ -252,7 +259,7 @@ impl PpcBackend {
                 }
                 // Piggyback the IRQ status on every response so the
                 // client never needs to poll/peek (zero extra syscalls).
-                if was_forwarding {
+                if was_forwarding && !is_irq_poll {
                     self.append_irq_flag(&mut client)?;
                 }
                 debug!(target:"PPC", "waiting for command");
@@ -330,16 +337,20 @@ impl PpcBackend {
         }
     }
 
-    /// Append a 1-byte IRQ latch flag after the response.
+    /// Append a 1-byte IRQ flag after the response.
     /// The client reads this extra byte as part of the same recv.
-    /// Clears the latch so each assertion only produces one notification.
+    /// Clears the edge latch, but still reports an asserted PI level.
     fn append_irq_flag(&self, client: &mut UnixStream) -> anyhow::Result<()> {
-        let mut bus = self.bus.write();
-        let flag: u8 = if bus.hlwd.pi.irq_latch { 1 } else { 0 };
-        bus.hlwd.pi.irq_latch = false;
-        drop(bus);
+        let flag = self.take_irq_flag();
         client.write_all(&[flag])?;
         Ok(())
+    }
+
+    fn take_irq_flag(&self) -> u8 {
+        let mut bus = self.bus.write();
+        let flag = bus.hlwd.pi.irq_latch || bus.hlwd.pi.irq_output;
+        bus.hlwd.pi.irq_latch = false;
+        flag as u8
     }
 
     /// Block until we receive some command message from a client.

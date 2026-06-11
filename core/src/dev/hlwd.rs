@@ -455,9 +455,10 @@ impl Bus {
         }
 
         // Cascade Hollywood PPC IRQ output into Flipper PI as bit 14
-        if self.hlwd.irq.ppc_irq_output {
-            self.hlwd.pi.assert(compat::pi::FlipperIrq::HollywoodIrqs);
-        }
+        self.hlwd.pi.set_level(
+            compat::pi::FlipperIrq::HollywoodIrqs,
+            self.hlwd.irq.ppc_irq_output,
+        );
 
         if self.hlwd.task.is_some() {
             match self.hlwd.task.unwrap() {
