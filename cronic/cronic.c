@@ -132,7 +132,6 @@ void IPC_Cleanup(void) {
 }
 
 void IPC_EnableFlipperIrqs(IPC_IrqCallback callback) {
-	char resp[2];
 	msg.u32[0] = cronic_cpu_to_le32(IRONIC_ENABLE_FLIPPER_IRQ_FORWARDING);
 	msg.u32[1] = 0;
 	msg.u32[2] = 0;
@@ -148,6 +147,29 @@ void IPC_EnableFlipperIrqs(IPC_IrqCallback callback) {
 
 	irq_forwarding = true;
 	irq_callback = callback;
+}
+
+void IPC_PollFlipperIrq(void) {
+	uint8_t flag;
+
+	if (!irq_forwarding)
+		return;
+
+	msg.u32[0] = cronic_cpu_to_le32(IRONIC_POLL_FLIPPER_IRQ);
+	msg.u32[1] = 0;
+	msg.u32[2] = 0;
+	if (write(IPC_Sock, &msg, 12) != 12) {
+		IPC_Err = 1;
+		return;
+	}
+
+	if (ipc_read_exact(&flag, 1) < 0) {
+		IPC_Err = 1;
+		return;
+	}
+
+	if (flag && irq_callback)
+		irq_callback();
 }
 
 uint8_t IPC_Read8(uint32_t addr) {

@@ -679,8 +679,12 @@ out:
 }
 
 static void emuStep(struct ppcemu_state *emu) {
+	static unsigned int irqPollCounter = 0;
 	uint32_t pc;
 	int i;
+
+	if (!gotIRQ && (++irqPollCounter & 0x3ff) == 0)
+		IPC_PollFlipperIrq();
 
 	if (gotIRQ) {
 		ppcemu_external_interrupt(emu);

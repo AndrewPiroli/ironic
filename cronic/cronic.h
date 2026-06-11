@@ -31,7 +31,10 @@ enum {
 	IRONIC_PPC_WRITE16 	= 10,
 	IRONIC_PPC_WRITE32 	= 11,
 	IRONIC_ENABLE_FLIPPER_IRQ_FORWARDING = 12,
-	IRONIC_FLIPPER_IRQ	= 13
+	IRONIC_FLIPPER_IRQ	= 13,
+	IRONIC_PATCH_RANGE      = 14,
+	IRONIC_DISABLE_PROTECTIONS = 15,
+	IRONIC_POLL_FLIPPER_IRQ = 16
 };
 
 typedef void (*IPC_IrqCallback)(void);
@@ -51,5 +54,6 @@ extern void IPC_Write(uint32_t addr, void *data, unsigned int len);
 
 
 extern void IPC_EnableFlipperIrqs(IPC_IrqCallback callback);
+extern void IPC_PollFlipperIrq(void);
 
 #endif /* _CRONIC_CRONIC_H */
