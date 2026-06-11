@@ -105,6 +105,21 @@ impl ProcessorInterface {
         }
     }
 
+    pub fn set_level(&mut self, irq: FlipperIrq, asserted: bool) {
+        if asserted {
+            if self.intmr.is_set(irq) {
+                let was_set = self.intsr.is_set(irq);
+                self.intsr.set(irq);
+                if !was_set {
+                    self.irq_latch = true;
+                }
+            }
+        } else {
+            self.intsr.unset(irq);
+        }
+        self.update_irq_lines();
+    }
+
     /// Recalculate irq_output after a register write.
     fn update_irq_lines(&mut self) {
         // Ignore Reset Switch State
