@@ -268,7 +268,7 @@ impl MmioDevice for Hollywood {
             0x060           => self.busctrl.srnprot,
             0x064           => self.busctrl.ahbprot,
             0x070           => self.busctrl.aipprot,
-            0x0c0..=0x0d8   => self.gpio.ppc.read_handler(off - 0xc0)?,
+            0x0c0..=0x0d8   => self.gpio.ppc.read_handler(&self.gpio.arm, off - 0xc0)?,
             0x0dc..=0x0fc   => self.gpio.arm.read_handler(off - 0xdc)?,
             0x100..=0x13c   => self.arb.read_handler(off - 0x100)?,
             0x180           => self.compat,
@@ -319,7 +319,9 @@ impl MmioDevice for Hollywood {
             0x064 => self.busctrl.ahbprot = val,
             0x070 => self.busctrl.aipprot = val,
             0x088 => self.usb_frc_rst = val,
-            0x0c0..=0x0d8 => self.gpio.ppc.write_handler(off - 0xc0, val)?,
+            0x0c0..=0x0d8 => {
+                self.task = self.gpio.ppc.write_handler(&mut self.gpio.arm, off - 0xc0, val)?;
+            },
             0x0dc..=0x0fc => {
                 self.task = self.gpio.arm.write_handler(off - 0xdc, val)?;
             },
@@ -466,5 +468,4 @@ impl Bus {
         Ok(())
     }
 }
-
 

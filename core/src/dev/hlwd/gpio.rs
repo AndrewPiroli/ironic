@@ -55,8 +55,28 @@ impl GpioInterface {
             info!(target: "Other", "GPIO Fan/DCDC output {diff:08x}");
         } else if (diff & 0x0000_0020) != 0 {
             info!(target: "Other", "GPIO Disc Slot LED output");
-        }
-        else {
+        } else if (diff & 0x0000_0100) != 0 {
+            if (val & 0x0000_0100) != 0 {
+                info!(target: "Other", "GPIO Sensor Bar On");
+            }
+            else {
+                info!(target: "Other", "GPIO Sensors Bar Off");
+            }
+        } else if (diff & 0x0000_4000) != 0 { // FIXME: actually emulate the AVE's i2c comms
+            if (val & 0x0000_4000) != 0 {
+                info!(target: "Other", "GPIO AVE Clock High");
+            }
+            else {
+                info!(target: "Other", "GPIO AVE Clock Low");
+            }
+        } else if (diff & 0x0000_8000) != 0 {
+            if (val & 0x0000_8000) != 0 {
+                info!(target: "Other", "GPIO AVE Data: 1");
+            }
+            else {
+                info!(target: "Other", "GPIO AVE Data: 0");
+            }
+        } else {
             bail!("Unhandled GPIO output arm.output={:08x} val={val:08x} diff={diff:08x}", self.arm.output);
         }
         Ok(())
@@ -131,20 +151,40 @@ pub struct PpcGpio {
     straps: u32,
 }
 impl PpcGpio {
-    pub fn write_handler(&mut self, off: usize, data: u32) -> anyhow::Result<()> {
+    pub fn write_handler(&self, arm: &mut ArmGpio, off: usize, data: u32) -> anyhow::Result<Option<HlwdTask>> {
+        let owner = arm.owner;
         match off {
-            0x00 => self.output = data,
-            0x04 => self.dir = data,
+            0x00 => {
+                let output = (arm.output & !owner) | (data & owner);
+                let task = if (arm.output ^ output) != 0 {
+                    Some(HlwdTask::GpioOutput(output))
+                } else {
+                    None
+                };
+                return Ok(task);
+            },
+            0x04 => arm.dir = arm.dir | (data & owner),
+            0x08 => { bail!("CPU wrote to GPIO inputs!?".to_string()); },
+            0x0c => arm.intlvl = arm.intlvl | (data & owner),
+            0x10 => arm.intflag = arm.intflag | (data & owner),
+            0x14 => arm.intmask = arm.intmask | (data & owner),
+            0x18 => arm.straps = arm.straps | (data & owner),
             _ => error!(target: "Other", "FIXME: unimplemented PpcGpio write {off:08x}: 0x{data:08x}"),
         };
-        Ok(())
+        Ok(None)
     }
-    pub fn read_handler(&self, off: usize) -> anyhow::Result<u32> {
+    pub fn read_handler(&self, arm: &ArmGpio, off: usize) -> anyhow::Result<u32> {
+        let owner = arm.owner;
         Ok(match off {
-            0x00 => self.output,
-            0x04 => self.dir,
+            0x00 => arm.output & owner,
+            0x04 => arm.dir & owner,
+            0x08 => arm.input & owner,
+            0x0c => arm.intlvl & owner,
+            0x10 => 0x0000_0000, //arm.intflag,
+            0x14 => arm.intmask & owner,
+            0x18 => arm.straps & owner,
             _ => { bail!("unimplemented PpcGpio read {off:08x}"); },
-        })
+        } & owner)
     }
 }
 
