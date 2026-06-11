@@ -4,6 +4,7 @@ use addr2line::Context;
 use gimli::BigEndian;
 use gimli::EndianSlice;
 use ironic_core::bus::*;
+use ironic_core::dev::hlwd::compat::vi::VideoInterface;
 use ironic_backend::interp::*;
 use ironic_backend::back::*;
 use ironic_backend::ppc::*;
@@ -54,6 +55,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     let bus = Arc::new(RwLock::new(bus));
+    let _vi_thread = VideoInterface::spawn_irq_thread(bus.clone()).unwrap();
 
     // Setup panic hook
     // We try to avoid panics inside the emulator, but it can happen so try to dump guest memory.
@@ -180,6 +182,7 @@ enum LogTarget {
     HLWD,
     IPC,
     IRQ,
+    VI,
     MEMSAVE,
     NAND,
     OTP,

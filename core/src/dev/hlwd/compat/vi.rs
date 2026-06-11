@@ -1,9 +1,22 @@
 use anyhow::bail;
-use log::{info, warn};
+use log::{debug, info, warn};
+use parking_lot::RwLock;
 
+use std::sync::Arc;
+use std::thread::{self, Builder, JoinHandle};
+use std::time::{Duration, Instant};
+
+use crate::bus::Bus;
 use crate::bus::prim::*;
 use crate::bus::mmio::*;
 use crate::bus::task::*;
+
+const DI_STATUS: u32 = 1 << 31;
+const DI_ENABLE: u32 = 1 << 28;
+const DI_VERTICAL_SHIFT: u32 = 16;
+const DI_VERTICAL_MASK: u32 = 0x03ff << DI_VERTICAL_SHIFT;
+const DI_HORIZONTAL_MASK: u32 = 0x03ff;
+const DI_WRITABLE_MASK: u32 = !DI_STATUS;
 
 /// Legacy Video Interface
 ///
@@ -87,6 +100,134 @@ pub struct VideoInterface {
     pub unk_78: u32,
     pub unk_7c: u32
 }
+
+#[derive(Debug, Clone, Copy)]
+struct DisplayInterrupt {
+    idx: usize,
+    reg: u32,
+}
+
+impl DisplayInterrupt {
+    fn new(idx: usize, reg: u32) -> Self {
+        Self { idx, reg }
+    }
+
+    fn enabled(self) -> bool {
+        (self.reg & DI_ENABLE) != 0
+    }
+
+    fn vertical(self) -> u32 {
+        (self.reg & DI_VERTICAL_MASK) >> DI_VERTICAL_SHIFT
+    }
+
+    fn horizontal(self) -> u32 {
+        self.reg & DI_HORIZONTAL_MASK
+    }
+
+    fn frame_offset(self, frame_duration: Duration, frame_lines: u32) -> Duration {
+        let line = self.vertical().min(frame_lines.saturating_sub(1));
+        let dot = self.horizontal().min(1023);
+        let position = (line as u128 * 1024) + dot as u128;
+        let frame = frame_lines as u128 * 1024;
+        let nanos = frame_duration.as_nanos() * position / frame;
+        Duration::from_nanos(nanos as u64)
+    }
+}
+
+impl VideoInterface {
+    pub fn spawn_irq_thread(bus: Arc<RwLock<Bus>>) -> std::io::Result<JoinHandle<()>> {
+        Builder::new().name("ViThread".to_owned()).spawn(move || {
+            loop {
+                let (frame_duration, frame_lines, mut interrupts) = {
+                    let bus = bus.read();
+                    let frame_duration = bus.hlwd.vi.frame_duration();
+                    let frame_lines = bus.hlwd.vi.frame_lines();
+                    let interrupts = bus.hlwd.vi.display_interrupts();
+                    (frame_duration, frame_lines, interrupts)
+                };
+
+                let frame_start = Instant::now();
+                interrupts.sort_by_key(|di| di.frame_offset(frame_duration, frame_lines));
+
+                for di in interrupts {
+                    let event_at = frame_start + di.frame_offset(frame_duration, frame_lines);
+                    if let Some(delay) = event_at.checked_duration_since(Instant::now()) {
+                        thread::sleep(delay);
+                    }
+
+                    let mut bus = bus.write();
+                    let hlwd = &mut bus.hlwd;
+                    if hlwd.vi.fire_display_interrupt(di.idx) {
+                        debug!(target: "VI", "Firing DI{}", di.idx);
+                    }
+                }
+
+                if let Some(delay) = (frame_start + frame_duration).checked_duration_since(Instant::now()) {
+                    thread::sleep(delay);
+                }
+            }
+        })
+    }
+
+    fn frame_duration(&self) -> Duration {
+        match (self.dcr & 0x0300) >> 8 {
+            1 => Duration::from_millis(20),
+            _ => Duration::from_millis(16),
+        }
+    }
+
+    fn frame_lines(&self) -> u32 {
+        match (self.dcr & 0x0300) >> 8 {
+            1 => 625,
+            _ => 525,
+        }
+    }
+
+    fn display_interrupts(&self) -> Vec<DisplayInterrupt> {
+        [self.di0, self.di1, self.di2, self.di3]
+            .into_iter()
+            .enumerate()
+            .map(|(idx, reg)| DisplayInterrupt::new(idx, reg))
+            .filter(|di| di.enabled())
+            .collect()
+    }
+
+    pub fn irq_pending(&self) -> bool {
+        [self.di0, self.di1, self.di2, self.di3]
+            .into_iter()
+            .any(|reg| (reg & DI_STATUS) != 0 && (reg & DI_ENABLE) != 0)
+    }
+
+    fn fire_display_interrupt(&mut self, idx: usize) -> bool {
+        let reg = match idx {
+            0 => &mut self.di0,
+            1 => &mut self.di1,
+            2 => &mut self.di2,
+            3 => &mut self.di3,
+            _ => return false,
+        };
+
+        let was_pending = (*reg & DI_STATUS) != 0;
+        let enabled = (*reg & DI_ENABLE) != 0;
+        *reg |= DI_STATUS;
+
+        enabled && !was_pending
+    }
+
+    fn write_di_register(reg: &mut u32, val: u32) {
+        *reg = val & DI_WRITABLE_MASK;
+    }
+
+    fn write_di_register_hi(reg: &mut u32, val: u16) {
+        let hi = (val as u32) << 16;
+        *reg = (*reg & 0x0000ffff) | (hi & DI_WRITABLE_MASK);
+    }
+
+    fn write_di_register_lo(reg: &mut u32, val: u16) {
+        *reg = (*reg & 0xffff0000) | val as u32;
+    }
+}
+
 impl MmioDeviceMultiWidth for VideoInterface {
     fn read8(&self, off: usize) -> anyhow::Result<BusPacket> {
         bail!("VI unsupported 8-bit read from offset {off:x}");
@@ -209,7 +350,19 @@ impl MmioDeviceMultiWidth for VideoInterface {
     fn write16(&mut self, off: usize, val: u16) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x00 => self.vtr = val,
-            0x02 => self.dcr = val,
+            0x02 => {
+                debug!(target: "VI", "DCR={:04x}", val);
+                if ((val & 0x0300) >> 8) != ((self.dcr & 0x0300) >> 8) {
+                    match (val & 0x0300) >> 8 {
+                        0 => info!(target: "VI", "New video mode: NTSC"),
+                        1 => info!(target: "VI", "New video mode: PAL"),
+                        2 => info!(target: "VI", "New video mode: MPAL"),
+                        3 => info!(target: "VI", "New video mode: DEBUG"),
+                        _ => unreachable!()
+                    };
+                };
+                self.dcr = val;
+            },
             0x04 => { self.htr0 &= 0x0000ffff; self.htr0 |= (val as u32) << 16; },
             0x06 => { self.htr0 &= 0xffff0000; self.htr0 |= val as u32; },
             0x08 => { self.htr1 &= 0x0000ffff; self.htr1 |= (val as u32) << 16; },
@@ -222,8 +375,8 @@ impl MmioDeviceMultiWidth for VideoInterface {
             0x16 => { self.bbei &= 0xffff0000; self.bbei |= val as u32; },
             0x18 => { self.bboi &= 0x0000ffff; self.bboi |= (val as u32) << 16; },
             0x1a => { self.bboi &= 0xffff0000; self.bboi |= val as u32; },
-            0x1c => { self.tfbl &= 0x0000ffff; self.tfbl |= (val as u32) << 16; },
-            0x1e => { self.tfbl &= 0xffff0000; self.tfbl |= val as u32; },
+            0x1c => { self.tfbl &= 0x0000ffff; self.tfbl |= (val as u32) << 16; info!(target: "VI", "TFBL @ {:08x}", self.tfbl); },
+            0x1e => { self.tfbl &= 0xffff0000; self.tfbl |= val as u32; info!(target: "VI", "TFBL @ {:08x}", self.tfbl); },
             0x20 => { self.tfbr &= 0x0000ffff; self.tfbr |= (val as u32) << 16; },
             0x22 => { self.tfbr &= 0xffff0000; self.tfbr |= val as u32; },
             0x24 => { self.bfbl &= 0x0000ffff; self.bfbl |= (val as u32) << 16; },
@@ -232,14 +385,14 @@ impl MmioDeviceMultiWidth for VideoInterface {
             0x2a => { self.bfbr &= 0xffff0000; self.bfbr |= val as u32; },
             0x2c => warn!(target: "VI", "Writing to DPV makes no sense"),
             0x2e => warn!(target: "VI", "Writing to DPH makes no sense"),
-            0x30 => { self.di0 &= 0x0000ffff; self.di0 |= (val as u32) << 16; },
-            0x32 => { self.di0 &= 0xffff0000; self.di0 |= val as u32; },
-            0x34 => { self.di1 &= 0x0000ffff; self.di1 |= (val as u32) << 16; },
-            0x36 => { self.di1 &= 0xffff0000; self.di1 |= val as u32; },
-            0x38 => { self.di2 &= 0x0000ffff; self.di2 |= (val as u32) << 16; },
-            0x3a => { self.di2 &= 0xffff0000; self.di2 |= val as u32; },
-            0x3c => { self.di3 &= 0x0000ffff; self.di3 |= (val as u32) << 16; },
-            0x3e => { self.di3 &= 0xffff0000; self.di3 |= val as u32; },
+            0x30 => Self::write_di_register_hi(&mut self.di0, val),
+            0x32 => Self::write_di_register_lo(&mut self.di0, val),
+            0x34 => Self::write_di_register_hi(&mut self.di1, val),
+            0x36 => Self::write_di_register_lo(&mut self.di1, val),
+            0x38 => Self::write_di_register_hi(&mut self.di2, val),
+            0x3a => Self::write_di_register_lo(&mut self.di2, val),
+            0x3c => Self::write_di_register_hi(&mut self.di3, val),
+            0x3e => Self::write_di_register_lo(&mut self.di3, val),
             0x40 => { self.dl0 &= 0x0000ffff; self.dl0 |= (val as u32) << 16; },
             0x42 => { self.dl0 &= 0xffff0000; self.dl0 |= val as u32; },
             0x44 => { self.dl1 &= 0x0000ffff; self.dl1 |= (val as u32) << 16; },
@@ -295,15 +448,15 @@ impl MmioDeviceMultiWidth for VideoInterface {
             0x10 => self.vte = val,
             0x14 => self.bbei = val,
             0x18 => self.bboi = val,
-            0x1c => self.tfbl = val,
+            0x1c => { self.tfbl = val; info!(target: "VI", "TFBL @ {:08x}", self.tfbl); },
             0x20 => self.tfbr = val,
             0x24 => self.bfbl = val,
             0x28 => self.bfbr = val,
             0x2c => warn!(target: "VI", "Writing to DPV/DPH makes no sense"),
-            0x30 => self.di0 = val,
-            0x34 => self.di1 = val,
-            0x38 => self.di2 = val,
-            0x3c => self.di3 = val,
+            0x30 => Self::write_di_register(&mut self.di0, val),
+            0x34 => Self::write_di_register(&mut self.di1, val),
+            0x38 => Self::write_di_register(&mut self.di2, val),
+            0x3c => Self::write_di_register(&mut self.di3, val),
             0x40 => self.dl0 = val,
             0x44 => self.dl1 = val,
             0x48 => { self.hsw = (val >> 16) as u16; self.hsr = (val & 0xffff) as u16; },
