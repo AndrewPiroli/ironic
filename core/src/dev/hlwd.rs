@@ -460,6 +460,12 @@ impl Bus {
             self.hlwd.irq.ppc_irq_output,
         );
 
+        // Handle VI IRQs from the Display Interrupt registers
+        self.hlwd.pi.set_level(
+            compat::pi::FlipperIrq::Vi,
+            self.hlwd.vi.irq_pending(),
+        );
+
         if self.hlwd.task.is_some() {
             match self.hlwd.task.unwrap() {
                 HlwdTask::GpioOutput(val) => self.hlwd.gpio.handle_output(val)?,
