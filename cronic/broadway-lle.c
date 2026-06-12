@@ -12,6 +12,264 @@
 #include <unistd.h>
 #include <ppcemu/ppcemu.h>
 #include "cronic.h"
+#include "endian.h"
+
+typedef struct {
+	uint8_t  e_ident[16];
+	uint16_t e_type;
+	uint16_t e_machine;
+	uint32_t e_version;
+	uint32_t e_entry;
+	uint32_t e_phoff;
+	uint32_t e_shoff;
+	uint32_t e_flags;
+	uint16_t e_ehsize;
+	uint16_t e_phentsize;
+	uint16_t e_phnum;
+	uint16_t e_shentsize;
+	uint16_t e_shnum;
+	uint16_t e_shstrndx;
+} __attribute__((packed)) Elf32_Ehdr;
+
+typedef struct {
+	uint32_t p_type;
+	uint32_t p_offset;
+	uint32_t p_vaddr;
+	uint32_t p_paddr;
+	uint32_t p_filesz;
+	uint32_t p_memsz;
+	uint32_t p_flags;
+	uint32_t p_align;
+} __attribute__((packed)) Elf32_Phdr;
+
+
+// This is not perfect.
+static void wiiInit(struct ppcemu_state * emu) {
+	//1. Set initial MSR (real mode: FP | ME | RI, no DR/IR)
+	// MSR_FP=0x2000, MSR_ME=0x1000, MSR_RI=0x0002
+	ppcemu_set_msr(emu, PPCEMU_MSR_FP | PPCEMU_MSR_ME | PPCEMU_MSR_RI);
+	// = 0x00003002
+	//2. HID0 — disable L1 caches, set DPM/NHR/ICFI/DCFI/SPD/DCFA/BTIC/BHT
+	// DPM  = bit 20 = 0x00100000
+	// NHR  = bit 19 = 0x00080000
+	// ICFI = bit 14 = 0x00004000
+	// DCFI = bit 13 = 0x00002000
+	// SPD  = bit 12 = 0x00001000
+	// DCFA = bit 10 = 0x00000400
+	// BTIC = bit  8 = 0x00000100
+	// BHT  = bit  4 = 0x00000010
+	ppcemu_set_spr(emu, PPCEMU_SPRN_HID0, 0x00187510);
+	//3. L2CR — disable L2
+	//ppcemu_set_spr(emu, PPCEMU_SPRN_L2CR, 0x00000000);
+	//4. HID2 — enable LSQE and PSE (Broadway/Wii)
+	// LSQE (BW) = bit 31 = 0x80000000
+	// PSE        = bit 29 = 0x20000000
+	ppcemu_set_spr(emu, PPCEMU_SPRN_HID2_GEKKO, 0xA0000000);
+	//5. HID4 — set H4A/SBE/ST0/LPE/L2CFI (Wii only)
+	// H4A   = bit 31 = 0x80000000  (PPCEMU_HID4_RSRVD1 — must-be-1, also enables HID4 access)
+	// SBE   = bit 25 = 0x02000000  (PPCEMU_HID4_SBE)
+	// ST0   = bit 24 = 0x01000000  (PPCEMU_HID4_BW_ST0)
+	// LPE   = bit 23 = 0x00800000  (PPCEMU_HID4_BW_LPE)
+	// L2CFI = bit 20 = 0x00100000  (PPCEMU_HID4_L2CFI)
+	ppcemu_set_spr(emu, PPCEMU_SPRN_HID4, 0x83900000);
+	//6. L2CR — start L2 invalidation
+	// L2I = bit 21 = 0x00200000
+	//ppcemu_set_spr(emu, PPCEMU_SPRN_L2CR, 0x00200000);
+	//7. Clear all BAT upper registers (disable all BATs)
+	// Lower 8 BATs (all models)
+	ppcemu_set_spr(emu, PPCEMU_SPRN_IBAT0U, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_IBAT1U, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_IBAT2U, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_IBAT3U, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT0U, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT1U, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT2U, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT3U, 0x00000000);
+	// Upper 8 BATs (Wii/Broadway)
+	ppcemu_set_spr(emu, PPCEMU_SPRN_IBAT4U, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_IBAT5U, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_IBAT6U, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_IBAT7U, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT4U, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT5U, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT6U, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT7U, 0x00000000);
+	//Note: Segment registers (SR0–SR15) are all set to 0x80000000 (direct-store bit) in the assembly, but there is no ppcemu_set_sr() in the public API. If the emulator supports segment registers, you'll need an internal/extended API call or they may initialize to a safe state by default.
+	//8. BAT0: 256MB @ 0x80000000 → PA 0x00000000, WIMG=0000, R/W
+	// BATU: BEPI=0x8000 (VA 0x8000_0000), BL=0x7FF (256MB), VS=1, VP=1
+	//   = (0x8000 << 17) | (0x7FF << 2) | 3 = 0x80000000 | 0x1FFC | 3 = 0x80001FFF
+	// BATL: BPRN=0 (PA 0x0000_0000), WIMG=0b0000, PP=0b10 (R/W)
+	//   = (0 << 17) | (0b0000 << 3) | 2 = 0x00000002
+
+	ppcemu_set_spr(emu, PPCEMU_SPRN_IBAT0L, 0x00000002);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_IBAT0U, 0x80001FFF);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT0L, 0x00000002);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT0U, 0x80001FFF);
+	//9. BAT4: 256MB @ 0x90000000 → PA 0x10000000, WIMG=0000, R/W (Wii)
+	// BATU: BEPI=0x9000 → 0x90001FFF
+	// BATL: BPRN=0x1000 → PA 0x10000000, WIMG=0b0000, PP=0b10 → 0x10000002
+
+	ppcemu_set_spr(emu, PPCEMU_SPRN_IBAT4L, 0x10000002);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_IBAT4U, 0x90001FFF);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT4L, 0x10000002);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT4U, 0x90001FFF);
+	//10. DBAT1: 256MB @ 0xC0000000 → PA 0x00000000, WIMG=0101 (cache-inhibited + guarded), R/W
+	// BATU: BEPI=0xC000 → 0xC0001FFF
+	// BATL: BPRN=0, WIMG=0b0101 → (0b0101 << 3)=0x28, PP=0b10=2 → 0x0000002A
+
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT1L, 0x0000002A);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT1U, 0xC0001FFF);
+	//11. DBAT5: 256MB @ 0xD0000000 → PA 0x10000000, WIMG=0101, R/W (Wii)
+	// BATU: 0xD0001FFF
+	// BATL: 0x1000002A
+
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT5L, 0x1000002A);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_DBAT5U, 0xD0001FFF);
+	//12. Clear all GQRs
+	ppcemu_set_spr(emu, PPCEMU_SPRN_GQR0, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_GQR1, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_GQR2, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_GQR3, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_GQR4, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_GQR5, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_GQR6, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_GQR7, 0x00000000);
+	//13. Clear performance monitor SPRs
+	ppcemu_set_spr(emu, PPCEMU_SPRN_MMCR0, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_MMCR1, 0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_PMC1,  0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_PMC2,  0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_PMC3,  0x00000000);
+	ppcemu_set_spr(emu, PPCEMU_SPRN_PMC4,  0x00000000);
+	//14. L2CR — wait for invalidation to finish, then enable L2
+	//The original code polls L2CR_L2IP (bit 20 = 0x00100000) until it clears. Since you're driving the emulator externally (not running real hardware), you can just skip the poll and write the final value directly:
+	// L2E = bit 31 = 0x80000000
+	//ppcemu_set_spr(emu, PPCEMU_SPRN_L2CR, 0x80000000);
+	//15. HID0 — re-enable L1 I-cache and D-cache
+	// Add ICE (bit 18 = 0x00040000) and DCE (bit 17 = 0x00020000) to what was set in step 2
+	// 0x00187510 | 0x00060000 = 0x001E7510
+	// Note: ICFI and DCFI bits (14 and 13) were a one-shot pulse; real HW clears them.
+	// Writing them here is fine as the emulator will handle them on write.
+	ppcemu_set_spr(emu, PPCEMU_SPRN_HID0, 0x001E7510);
+	//16. Set final MSR — re-enable address translation (DR | IR)
+	// FP=0x2000, ME=0x1000, RI=0x0002, DR=0x0010, IR=0x0020
+	ppcemu_set_msr(emu, PPCEMU_MSR_FP | PPCEMU_MSR_ME | PPCEMU_MSR_RI |
+	                    PPCEMU_MSR_DR | PPCEMU_MSR_IR);
+}
+
+
+#define PT_LOAD  1
+
+static int loadElf(const char *path, uint32_t * const out_pc) {
+	FILE *f;
+	Elf32_Ehdr ehdr;
+	Elf32_Phdr phdr;
+	uint8_t *buf;
+	uint32_t entry, phoff, phentsize, phnum;
+	uint32_t offset, vaddr, filesz, memsz;
+	uint32_t i, zeros;
+	static const uint8_t zero_block[256] = {0};
+
+	f = fopen(path, "rb");
+	if (!f) {
+		perror("Failed to open ELF file");
+		return -1;
+	}
+
+	if (fread(&ehdr, sizeof(ehdr), 1, f) != 1) {
+		puts("Failed to read ELF header");
+		fclose(f);
+		return -1;
+	}
+
+	if (ehdr.e_ident[0] != 0x7f || ehdr.e_ident[1] != 'E' ||
+	    ehdr.e_ident[2] != 'L'  || ehdr.e_ident[3] != 'F') {
+		puts("Not a valid ELF file");
+		fclose(f);
+		return -1;
+	}
+
+	entry     = cronic_be32_to_cpu(ehdr.e_entry);
+	phoff     = cronic_be32_to_cpu(ehdr.e_phoff);
+	phentsize = cronic_be16_to_cpu(ehdr.e_phentsize);
+	phnum     = cronic_be16_to_cpu(ehdr.e_phnum);
+
+	printf("ELF entry point: 0x%08x\r\n", entry);
+	*out_pc = entry;
+
+	for (i = 0; i < phnum; i++) {
+		if (fseek(f, (long)(phoff + i * phentsize), SEEK_SET) != 0) {
+			puts("Failed to seek to program header");
+			fclose(f);
+			return -1;
+		}
+
+		if (fread(&phdr, sizeof(phdr), 1, f) != 1) {
+			puts("Failed to read program header");
+			fclose(f);
+			return -1;
+		}
+
+		if (cronic_be32_to_cpu(phdr.p_type) != PT_LOAD)
+			continue;
+
+		offset = cronic_be32_to_cpu(phdr.p_offset);
+		vaddr  = cronic_be32_to_cpu(phdr.p_vaddr);
+		filesz = cronic_be32_to_cpu(phdr.p_filesz);
+		memsz  = cronic_be32_to_cpu(phdr.p_memsz);
+
+		printf("Loading segment %u: file offset 0x%08x -> vaddr 0x%08x, filesz 0x%08x, memsz 0x%08x\r\n",
+		       i, offset, vaddr, filesz, memsz);
+
+		if (filesz > 0) {
+			buf = malloc(filesz);
+			if (!buf) {
+				puts("Out of memory");
+				fclose(f);
+				return -1;
+			}
+
+			if (fseek(f, (long)offset, SEEK_SET) != 0) {
+				puts("Failed to seek to segment data");
+				free(buf);
+				fclose(f);
+				return -1;
+			}
+
+			if (fread(buf, filesz, 1, f) != 1) {
+				puts("Failed to read segment data");
+				free(buf);
+				fclose(f);
+				return -1;
+			}
+
+			IPC_Write(~(0x3 << 30) & vaddr, buf, filesz);
+			free(buf);
+
+			if (IPC_Err) {
+				puts("IPC error while loading segment");
+				fclose(f);
+				return -1;
+			}
+		}
+
+		// zero-fill
+		zeros = memsz - filesz;
+		while (zeros > 0) {
+			uint32_t chunk = zeros < sizeof(zero_block) ? zeros : (uint32_t)sizeof(zero_block);
+			IPC_Write(~(0x3 << 30) & (vaddr + filesz + (memsz - filesz - zeros)), (void *)zero_block, chunk);
+			if (IPC_Err) {
+				puts("IPC error while zeroing segment");
+				fclose(f);
+				return -1;
+			}
+			zeros -= chunk;
+		}
+	}
+
+	fclose(f);
+	return 0;
+}
 
 /*#define DEBUG_BUS*/
 #define NUM_BREAKPOINTS 16
@@ -717,7 +975,7 @@ static void irqHandler(void) {
 	gotIRQ = true;
 }
 
-int main(void) {
+int main(int argc, char *argv[]) {
 	struct ppcemu_state *emu;
 	bool tmpRunning;
 
@@ -730,6 +988,17 @@ int main(void) {
 	if (IPC_Init()) {
 		puts("cronic init failed");
 		return 1;
+	}
+
+	if (argc >= 2) {
+		uint32_t newpc;
+		if (loadElf(argv[1], &newpc) != 0) {
+			puts("Failed to load ELF");
+			IPC_Cleanup();
+			return 1;
+		}
+		wiiInit(emu);
+		ppcemu_set_pc(emu, newpc);
 	}
 
 	IPC_EnableFlipperIrqs(irqHandler);

@@ -291,18 +291,39 @@ void IPC_Read(uint32_t addr, void *data, unsigned int len) {
 	}
 }
 
+#define IPC_MAXWRITE (10000 - 12)
+
+void __IPC_LargeWrite(uint32_t addr, void *data, unsigned int len) {
+	uint32_t remaining = len;
+	while (remaining > 0) {
+		uint32_t const offset = len - remaining;
+		uint32_t towrite;
+		if (remaining > IPC_MAXWRITE)
+			towrite = IPC_MAXWRITE;
+		else
+			towrite = remaining;
+		IPC_Write(addr + offset, data + offset, towrite);
+		remaining -= towrite;
+	}
+}
+
+
+
 /* FIXME: should use a proper PPC 'write buffer' command at some point */
 void IPC_Write(uint32_t addr, void *data, unsigned int len) {
 	msg.u32[0] = cronic_cpu_to_le32(IRONIC_WRITE);
 	msg.u32[1] = cronic_cpu_to_le32(addr);
 	msg.u32[2] = cronic_cpu_to_le32(len);
-	if (len > sizeof(msg) - 12) {
-		printf("IPC_Write: data too big: %u\r\n", len);
+	if (len > IPC_MAXWRITE) {
+		__IPC_LargeWrite(addr, data, len);
 		return;
 	}
-	memcpy(&msg.u32[3], data, len);
 
-	if (write(IPC_Sock, &msg, 12 + len) != 12 + len) {
+	if (write(IPC_Sock, &msg, 12) != 12) {
+		IPC_Err = 1;
+		return;
+	}
+	if (write(IPC_Sock, data, len) != len) {
 		IPC_Err = 1;
 		return;
 	}
