@@ -380,7 +380,7 @@ impl MmioDeviceMultiWidth for VideoInterface {
             0x20 => { self.tfbr &= 0x0000ffff; self.tfbr |= (val as u32) << 16; },
             0x22 => { self.tfbr &= 0xffff0000; self.tfbr |= val as u32; },
             0x24 => { self.bfbl &= 0x0000ffff; self.bfbl |= (val as u32) << 16; },
-            0x26 => { self.bfbl &= 0xfff0000; self.bfbl |= val as u32; },
+            0x26 => { self.bfbl &= 0xffff0000; self.bfbl |= val as u32; },
             0x28 => { self.bfbr &= 0x0000ffff; self.bfbr |= (val as u32) << 16; },
             0x2a => { self.bfbr &= 0xffff0000; self.bfbr |= val as u32; },
             0x2c => warn!(target: "VI", "Writing to DPV makes no sense"),
