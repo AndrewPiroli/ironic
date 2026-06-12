@@ -187,8 +187,10 @@ impl VideoInterface {
         [self.di0, self.di1, self.di2, self.di3]
             .into_iter()
             .enumerate()
-            .map(|(idx, reg)| DisplayInterrupt::new(idx, reg))
-            .filter(|di| di.enabled())
+            .filter_map(|(idx, reg)| {
+                let intr = DisplayInterrupt::new(idx, reg);
+                if intr.enabled() { Some(intr) } else { None }
+            })
             .collect()
     }
 
@@ -421,7 +423,7 @@ impl MmioDeviceMultiWidth for VideoInterface {
                 } else if val == 0 {
                     info!(target: "VI", "Setting video clock to 27MHz");
                 } else {
-                    warn!("Trying to set bogus VI clock speed {val:x}");
+                    warn!(target: "VI", "Trying to set bogus VI clock speed {val:x}");
                 }
                 self.viclk = val;
             },
