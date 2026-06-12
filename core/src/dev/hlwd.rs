@@ -204,6 +204,8 @@ pub struct Hollywood {
     pub ddr: ddr::DdrInterface,
 
     pub arb: ArbCfgInterface,
+    pub unk_20: u32,
+    pub unk_28: u32,
     pub reset_ahb: u32,
     pub clocks: u32,
     pub resets: u32,
@@ -215,7 +217,6 @@ pub struct Hollywood {
     pub io_str_ctrl1: u32,
 
     pub usb_frc_rst: u32,
-    pub vi1cfg: u32,
     pub ppc_on: bool,
 }
 impl Hollywood {
@@ -244,6 +245,8 @@ impl Hollywood {
 
             usb_frc_rst: 0,
             arb: ArbCfgInterface::default(),
+            unk_20: 0,
+            unk_28: 0,
             reset_ahb: 0x0000_ffff,
             resets: 0x0000_0008,
             clocks: 0,
@@ -252,7 +255,6 @@ impl Hollywood {
             spare1: 0,
             io_str_ctrl0: 0,
             io_str_ctrl1: 0,
-            vi1cfg: 0,
             ppc_on: false,
         })
     }
@@ -266,7 +268,11 @@ impl MmioDevice for Hollywood {
             0x000..=0x00c   => self.ipc.read_handler(off)?,
             0x010           => self.timer.timer,
             0x014           => self.timer.alarm,
-            0x018           => self.vi1cfg,
+            0x018           => self.vi.vi1cfg,
+            0x01c           => self.vi.vidim,
+            0x020           => self.unk_20,
+            0x024           => self.vi.visolid,
+            0x028           => self.unk_28,
             0x030..=0x05c   => self.irq.read_handler(off - 0x30)?,
             0x060           => self.busctrl.srnprot,
             0x064           => self.busctrl.ahbprot,
@@ -315,12 +321,16 @@ impl MmioDevice for Hollywood {
     fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x000..=0x00c => self.ipc.write_handler(off, val)?,
-             0x010 => { self.timer.timer = val; },
+            0x010 => self.timer.timer = val,
             0x014 => {
                 info!(target: "HLWD", "alarm={val:08x} (timer={:08x})", self.timer.timer);
                 self.timer.alarm = val;
             },
-            0x018 => { self.vi1cfg = val; }
+            0x018 => self.vi.vi1cfg = val,
+            0x01c => self.vi.vidim = val,
+            0x020 => self.unk_20 = val,
+            0x024 => self.vi.visolid = val,
+            0x028 => self.unk_28 = val,
             0x030..=0x05c => self.irq.write_handler(off - 0x30, val)?,
             0x060 => {
                 info!(target: "HLWD", "SRNPROT={val:08x}");

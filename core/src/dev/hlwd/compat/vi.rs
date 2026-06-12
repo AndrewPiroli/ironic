@@ -98,7 +98,12 @@ pub struct VideoInterface {
     pub hbs: u16,
     pub unk_76: u16,
     pub unk_78: u32,
-    pub unk_7c: u32
+    pub unk_7c: u32,
+
+    /// Misc VI-related Hollywood Registers
+    pub vi1cfg: u32,
+    pub vidim: u32,
+    pub visolid: u32
 }
 
 #[derive(Debug, Clone, Copy)]
