@@ -18,6 +18,7 @@ class IronicSocket(object):
     IRONIC_PPC_WRITE32 = 11
     IRONIC_PATCH       = 14
     IRONIC_DISABLEPROT = 15
+    IRONIC_DUMPXFB     = 17
     IRONIC_QUIT        = 255
 
     def __init__(self, filename="/tmp/ironic-ppc.sock"):
@@ -154,6 +155,12 @@ class IronicSocket(object):
         resp = self.recv(2)
         assert resp.decode('utf-8') == "OK"
 
+    def send_xfbdump(self, path: MemHandle):
+        msg = bytearray()
+        msg += pack("<LLL", self.IRONIC_DUMPXFB, path.paddr, path.size)
+        self.socket.sendall(msg)
+        resp = self.recv(2)
+        assert resp.decode('utf-8') == "OK"
 
     def recv_ipcmsg(self):
         """ Wait for the server to respond with a pointer to an IPC message """

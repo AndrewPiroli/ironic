@@ -93,6 +93,10 @@ class IPCClient(object):
     def disable_ppc_protections(self):
         self.sock.send_disableprot()
 
+    def dump_xfb(self, path: str):
+        path = self.alloc_buf(path)
+        self.sock.send_xfbdump(path)
+
     def IOSOpen(self, inpath, mode=0):
         buf = self.alloc_buf(inpath.encode('utf-8') + b'\x00')
         msg = IPCMsg(self.IPC_OPEN, fd=0, args=[buf.paddr, mode])

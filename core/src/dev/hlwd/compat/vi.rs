@@ -480,3 +480,52 @@ impl MmioDeviceMultiWidth for VideoInterface {
         Ok(None)
     }
 }
+
+/// Helper Utility to convert broadcast level YCbCr to RGB
+pub fn ycbcr_to_rgb(y: u8, cb: u8, cr: u8) -> (u8, u8, u8) {
+    let y = (y as f64 - 16.0) * 255.0 / 219.0; // scale luminance from studio to full
+    let cb = cb as f64 - 128.0;
+    let cr = cr as f64 - 128.0;
+    let r = (y + 1.371 * cr).clamp(0.0, 255.0) as u8;
+    let g = (y - 0.698 * cr - 0.336 * cb).clamp(0.0, 255.0) as u8;
+    let b = (y + 1.732 * cb).clamp(0.0,255.0) as u8;
+    (r, g, b)
+}
+
+impl Bus {
+    pub fn dump_xfb(&self) -> Box<[u8]> {
+        use crate::dev::hlwd::compat::vi::ycbcr_to_rgb;
+        use bmp::{Image, Pixel, px};
+        use core::ops::Deref;
+        let _dcr = self.hlwd.vi.dcr;
+        let tfbl = (self.hlwd.vi.tfbl - 1) as usize;
+        let mem1 = self.mem1.data.deref();
+        // fixme resolution detection
+        const FIXME_LEN: usize = 61440;
+        const FIXME_HEIGHT: u32 = 480;
+        const FIXME_WIDTH: usize = 640;
+        let mut yuyv_bytes = vec![0u8;FIXME_LEN];
+        yuyv_bytes.copy_from_slice(&mem1[tfbl..tfbl + FIXME_LEN]);
+        let mut img = Image::new(FIXME_WIDTH as u32, FIXME_HEIGHT);
+        for packed_stride in 0..(FIXME_LEN / 4) {
+            let start_byte = packed_stride * 4;
+            let (cb, y1, cr, y2) = (yuyv_bytes[start_byte], yuyv_bytes[start_byte+1], yuyv_bytes[start_byte+2], yuyv_bytes[start_byte+3]);
+            let (r, g, b) = ycbcr_to_rgb(y1, cb, cr);
+            let (x, y) = ((packed_stride * 2) % FIXME_WIDTH, (packed_stride * 2) / FIXME_WIDTH);
+            img.set_pixel(x as u32, y as u32, px!(r, g ,b));
+            if x+1 < FIXME_WIDTH {
+                let (r, g, b) = ycbcr_to_rgb(y2, cb, cr);
+                img.set_pixel(x as u32 + 1, y as u32, px!(r, g, b));
+            }
+        }
+        // stupid
+        let mut cur = std::io::Cursor::new(Vec::with_capacity(FIXME_LEN + 64));
+        if let Err(e) = img.to_writer(&mut cur) {
+            log::error!("Failed to save XFB dump {e}");
+            return Box::default();
+        }
+        let mut ret = cur.into_inner();
+        ret.shrink_to_fit();
+        return ret.into_boxed_slice();
+    }
+}

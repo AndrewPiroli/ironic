@@ -333,3 +333,21 @@ void IPC_Write(uint32_t addr, void *data, unsigned int len) {
 		return;
 	}
 }
+
+void IPC_DumpXFB(char* const path) {
+	// FIXME: Allocate a real address. Chosen not to interfere with pyronic...
+	IPC_Write(0x01780000, path, strlen(path));
+	if (IPC_Err)
+		return;
+	msg.u32[0] = cronic_cpu_to_le32(17);
+	msg.u32[1] = cronic_cpu_to_le32(0x01780000);
+	msg.u32[2] = cronic_cpu_to_le32(strlen(path));
+	if (write(IPC_Sock, &msg, 12) != 12) {
+		IPC_Err = 1;
+		return;
+	}
+	if (ipc_recv_ok() < 0) {
+		IPC_Err = 1;
+		return;
+	}
+}

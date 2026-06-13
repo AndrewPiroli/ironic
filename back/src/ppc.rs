@@ -15,6 +15,7 @@ use std::thread;
 use std::sync::Arc;
 use std::net::Shutdown;
 use std::io::{Read, Write};
+use anyhow::anyhow;
 
 
 #[cfg(target_family = "unix")]
@@ -44,6 +45,7 @@ pub enum Command {
     PatchRange,
     DisableProtections,
     PollFlipperIrq,
+    DumpXfb,
     Shutdown,
     Unimpl,
 }
@@ -66,6 +68,7 @@ impl Command {
             14 => Self::PatchRange,
             15 => Self::DisableProtections,
             16 => Self::PollFlipperIrq,
+            17 => Self::DumpXfb,
             255 => Self::Shutdown,
             _ => Self::Unimpl,
         }
@@ -252,6 +255,9 @@ impl PpcBackend {
                         self.forward_irqs = true;
                     }
                     Command::FlipperIrq => break, // server->client only
+                    Command::DumpXfb => {
+                        self.handle_dump_xfb(&mut client, req)?;
+                    },
                     Command::Unimpl => {
                         error!(target: "PPC", "recieved unimplemented command");
                         break;
@@ -506,6 +512,21 @@ impl PpcBackend {
         }
         info!(target: "RTPATCH", "Applied patch {} times", found);
         client.write_all(&found.to_le_bytes())?;
+        Ok(())
+    }
+
+    pub fn handle_dump_xfb(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
+        let bus = self.bus.read();
+        let bytes = bus.dump_xfb();
+        let mut pb = vec!(0u8; req.len as usize);
+        bus.dma_read(req.addr, &mut pb)?;
+        drop(bus);
+        let path = PathBuf::from(str::from_utf8(&pb)?);
+        if let Err(e) = std::fs::write(path, &bytes) {
+            let _ = client.write_all(b"F1");
+            return Err(anyhow!(e));
+        }
+        client.write_all(b"OK")?;
         Ok(())
     }
 

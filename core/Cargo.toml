@@ -19,3 +19,4 @@ lz4_flex = { version = "~0.13.0", default-features = false, features = ["std", "
 iset = { version = "~0.3.1", default-features = false }
 parking_lot = { version = "~0.12.5", default-features = false, features = ["nightly", "hardware-lock-elision"] }
 memmap = { package = "memmap2", version = "~0.9.10" }
+bmp = { version = "=0.5.0", default-features = false }
