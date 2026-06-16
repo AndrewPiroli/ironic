@@ -1,0 +1,41 @@
+import { Button, VerticalBox, TabWidget, AboutSlint, GridBox, GroupBox, Spinner } from "std-widgets.slint";
+import { OptionsPane } from "options-pane.slint";
+
+component WipView inherits GroupBox {
+    title: "App under development, this pane isn't ready yet!";
+    Spinner {indeterminate: true;}
+}
+
+export component AppWindow inherits Window {
+    title: "ironic - Low Level Wii System Research Emulator";
+    preferred-width: 800px;
+    preferred-height: 600px;
+    VerticalBox {
+        TabWidget {
+            Tab {
+                title: "ARM Emulation";
+            }
+            Tab {
+                title: "PPC Emulation";
+                WipView {}
+            }
+            Tab {
+                title: "Debugging";
+                WipView {}
+            }
+            Tab {
+                title: "Haxx";
+                WipView {}
+            }
+            Tab {
+                title: "Options";
+                OptionsPane {}
+            }
+            Tab {
+                title: "About";
+                AboutSlint { height: 75px; }
+            }
+        }
+    }
+}
+

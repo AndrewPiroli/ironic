@@ -3,6 +3,7 @@ members = [
 	"core",
 	"back",
 	"tui",
+	"gui",
 	"vendor/rust-elf",
 ]
 resolver = "2"
