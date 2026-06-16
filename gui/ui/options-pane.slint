@@ -1,0 +1,52 @@
+import { ComboBox, GroupBox, GridBox, VerticalBox, HorizontalBox, ScrollView } from "std-widgets.slint";
+// `off`, `error`, `warn`, `info`, `debug`, or `trace`
+component LogLevel inherits ComboBox {
+    model: ["Off", "Error", "Warning", "Info", "Debug", "Trace"];
+}
+
+component IronicLogOption {
+    in property <string> Name;
+    height: 50px;
+    HorizontalBox {
+        Text {
+            text: Name;
+        }
+        LogLevel {
+            max-width: 50px;
+            current-index: 3;
+        }
+    }
+}
+
+export component OptionsPane inherits GroupBox {
+    title: "Application Options";
+    width: 100%;
+    height: 100%;
+    ScrollView {
+        horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+        vertical-scrollbar-policy: ScrollBarPolicy.as-needed;
+        viewport-height: 19 * 50px;
+        viewport-width: parent.width;
+        VerticalBox {
+            IronicLogOption { Name: "AES"; }
+            IronicLogOption { Name: "DEBUG_PORT"; }
+            IronicLogOption { Name: "EXI"; }
+            IronicLogOption { Name: "HLWD"; }
+            IronicLogOption { Name: "IPC"; }
+            IronicLogOption { Name: "IRQ"; }
+            IronicLogOption { Name: "VI"; }
+            IronicLogOption { Name: "MEMSAVE"; }
+            IronicLogOption { Name: "NAND"; }
+            IronicLogOption { Name: "OTP"; }
+            IronicLogOption { Name: "PPC"; }
+            IronicLogOption { Name: "SDHC"; }
+            IronicLogOption { Name: "SEEPROM"; }
+            IronicLogOption { Name: "SHA"; }
+            IronicLogOption { Name: "SYSCALL"; }
+            IronicLogOption { Name: "SVC"; }
+            IronicLogOption { Name: "xHCI"; }
+            IronicLogOption { Name: "RTPATCH"; }
+            IronicLogOption { Name: "Other"; }
+        }
+    }
+}
