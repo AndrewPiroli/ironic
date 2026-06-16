@@ -2,6 +2,7 @@
 
 pub mod back;
 pub mod bits;
+pub mod cleanup;
 pub mod decode;
 
 pub mod interp;

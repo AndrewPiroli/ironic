@@ -8,6 +8,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::OnceLock;
 use log::error;
 
+
 use crate::bus::task::*;
 
 use crate::mem::*;
@@ -71,7 +72,11 @@ pub struct Bus {
     pub cycle: usize,
 }
 impl Bus {
-    pub fn new()-> anyhow::Result<Self> {
+    pub fn new() -> anyhow::Result<Self> {
+        Bus::with_shutdown(Arc::new(AtomicBool::new(false)))
+    }
+
+    pub fn with_shutdown(shutdown: Arc<AtomicBool>) -> anyhow::Result<Self> {
         Ok(Bus {
             mrom: BigEndianMemory::from_file(0x0000_2000, "./boot0.bin", false)?,
             sram0: BigEndianMemory::new(0x0001_0000),
@@ -93,6 +98,11 @@ impl Bus {
             mirror_enabled: false,
             tasks: Vec::new(),
             cycle: 0,
+<<<<<<< HEAD
+=======
+            debuginfo: Box::default(),
+            shutdown,
+>>>>>>> db61d60 (ok maybe?)
         })
     }
 

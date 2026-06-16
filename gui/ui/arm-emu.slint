@@ -1,0 +1,108 @@
+import { GroupBox, VerticalBox, HorizontalBox, Button, ListView, CheckBox } from "std-widgets.slint";
+
+export struct LogDesc {
+    facility: string,
+    level: string,
+    txt: string,
+}
+
+export component LogItem inherits Rectangle {
+    in property <string> facility;
+    in property <string> level;
+    in property <string> txt;
+
+    height: 18px;
+
+    HorizontalLayout {
+        spacing: 8px;
+        padding-left: 4px;
+        padding-right: 4px;
+
+        Text {
+            width: 110px;
+            vertical-alignment: center;
+            overflow: elide;
+            text: facility;
+        }
+        Text {
+            width: 55px;
+            vertical-alignment: center;
+            text: level;
+            color: level == "ERROR" ? #ff5555
+                 : level == "WARN"  ? #ffb86c
+                 : level == "DEBUG" ? #6fa8dc
+                 : level == "TRACE" ? #999999
+                 : #4caf50;
+        }
+        Text {
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+            overflow: elide;
+            text: txt;
+        }
+    }
+}
+
+export component ArmEmu inherits GroupBox {
+    title: "Arm Emulation";
+    height: 100%;
+    width: 100%;
+
+    in property <[LogDesc]> logs;
+    in property <bool> running: false;
+    in property <bool> stopping: false;
+    in property <string> status: "Idle";
+
+    callback start-emu();
+    callback stop-emu();
+    callback clear-logs();
+
+    // Called from Rust after new rows are appended.
+    public function scroll-to-bottom() {
+        if (follow.checked) {
+            list.viewport-y = Math.min(0, list.visible-height - list.viewport-height);
+        }
+    }
+
+    VerticalBox {
+        HorizontalBox {
+            alignment: start;
+            vertical-stretch: 0;
+
+            Button {
+                text: "Start";
+                enabled: !root.running && !root.stopping;
+                primary: !root.running;
+                clicked => { root.start-emu(); }
+            }
+            Button {
+                text: "Stop";
+                enabled: root.running && !root.stopping;
+                clicked => { root.stop-emu(); }
+            }
+            Button {
+                text: "Clear log";
+                clicked => { root.clear-logs(); }
+            }
+            follow := CheckBox {
+                text: "Follow log";
+                checked: true;
+            }
+            Text {
+                vertical-alignment: center;
+                text: root.status;
+            }
+        }
+
+        list := ListView {
+            width: 100%;
+            vertical-stretch: 1;
+
+            for entry in root.logs: LogItem {
+                facility: entry.facility;
+                level: entry.level;
+                txt: entry.txt;
+            }
+        }
+    }
+}

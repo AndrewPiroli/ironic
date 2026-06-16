@@ -1,0 +1,94 @@
+import { ComboBox, GroupBox, VerticalBox, HorizontalBox, ScrollView } from "std-widgets.slint";
+
+// Index 0 is "Default" (inherit the base level); 1..=6 map onto
+// log::LevelFilter Off..Trace. The base-level combo has no "Default" entry, so
+// its indices are shifted down by one.
+export global LogLevels {
+    out property <[string]> with-default: ["Default", "Off", "Error", "Warning", "Info", "Debug", "Trace"];
+    out property <[string]> plain: ["Off", "Error", "Warning", "Info", "Debug", "Trace"];
+}
+
+export struct LogOptionDesc {
+    name: string,
+    // 0 = inherit base, otherwise LevelFilter + 1
+    level: int,
+}
+
+component IronicLogOption {
+    in property <string> name;
+    in property <int> level;
+    callback level-picked(int);
+
+    height: 34px;
+
+    HorizontalBox {
+        padding-top: 2px;
+        padding-bottom: 2px;
+
+        Text {
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+            text: name;
+        }
+        ComboBox {
+            width: 120px;
+            model: LogLevels.with-default;
+            current-index: level;
+            selected => { root.level-picked(self.current-index); }
+        }
+    }
+}
+
+export component OptionsPane inherits GroupBox {
+    title: "Logging Options";
+    width: 100%;
+    height: 100%;
+
+    in property <[LogOptionDesc]> log-options;
+    in property <int> base-level;
+
+    callback base-level-picked(int);
+    callback target-level-picked(int /* row */, int /* level */);
+
+    VerticalBox {
+        HorizontalBox {
+            vertical-stretch: 0;
+            Text {
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                text: "Default level (applies to every target set to \"Default\")";
+                font-weight: 700;
+            }
+            ComboBox {
+                width: 120px;
+                model: LogLevels.plain;
+                current-index: root.base-level;
+                selected => { root.base-level-picked(self.current-index); }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            vertical-stretch: 0;
+            background: #80808060;
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
+            vertical-scrollbar-policy: ScrollBarPolicy.as-needed;
+            viewport-height: root.log-options.length * 34px;
+            viewport-width: self.visible-width;
+
+            VerticalLayout {
+                alignment: start;
+                for opt[idx] in root.log-options: IronicLogOption {
+                    name: opt.name;
+                    level: opt.level;
+                    level-picked(lvl) => { root.target-level-picked(idx, lvl); }
+                }
+            }
+        }
+    }
+}
