@@ -4,4 +4,6 @@
       "core" : true,
       "tui" : true,
 	},
+  "rust-analyzer.diagnostics.enable": false,
+  "rust-analyzer.checkOnSave.enable": true
 }

@@ -11,6 +11,9 @@ default-run = "ironic-gui"
 ironic-core = { path = "../core" }
 ironic-backend = { path = "../back" }
 slint = "1.16.1"
+log = { version = "~0.4.29", default-features = false, features = ["std"] }
+fxhash = "=0.2.1"
+parking_lot = { version = "~0.12.5", default-features = false, features = ["nightly", "hardware-lock-elision"] }
 
 [target.'cfg(windows)'.build-dependencies]
 embed-manifest = "1.5.0"

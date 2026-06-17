@@ -1,5 +1,6 @@
 import { Button, VerticalBox, TabWidget, AboutSlint, GridBox, GroupBox, Spinner } from "std-widgets.slint";
 import { OptionsPane } from "options-pane.slint";
+import { ArmEmu, LogDesc } from "arm-emu.slint";
 
 component WipView inherits GroupBox {
     title: "App under development, this pane isn't ready yet!";
@@ -10,10 +11,13 @@ export component AppWindow inherits Window {
     title: "ironic - Low Level Wii System Research Emulator";
     preferred-width: 800px;
     preferred-height: 600px;
+
+    in-out property <[LogDesc]> logs;
     VerticalBox {
         TabWidget {
             Tab {
                 title: "ARM Emulation";
+                ArmEmu { logs: logs; }
             }
             Tab {
                 title: "PPC Emulation";
