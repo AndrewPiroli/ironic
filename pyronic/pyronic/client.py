@@ -94,8 +94,7 @@ class IPCClient(object):
         self.sock.send_disableprot()
 
     def dump_xfb(self, path: str):
-        path = self.alloc_buf(path)
-        self.sock.send_xfbdump(path)
+        self.sock.send_xfbdump(path.encode('utf-8'))
 
     def IOSOpen(self, inpath, mode=0):
         buf = self.alloc_buf(inpath.encode('utf-8') + b'\x00')

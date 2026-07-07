@@ -155,9 +155,10 @@ class IronicSocket(object):
         resp = self.recv(2)
         assert resp.decode('utf-8') == "OK"
 
-    def send_xfbdump(self, path: MemHandle):
+    def send_xfbdump(self, path: bytes):
         msg = bytearray()
-        msg += pack("<LLL", self.IRONIC_DUMPXFB, path.paddr, path.size)
+        msg += pack("<LLL", self.IRONIC_DUMPXFB, 0, len(path))
+        msg += path
         self.socket.sendall(msg)
         resp = self.recv(2)
         assert resp.decode('utf-8') == "OK"
@@ -175,6 +176,5 @@ class IronicSocket(object):
         self.socket.sendall(msg)
         resp = self.recv(2)
         assert resp.decode('utf-8') == "OK"
-
 
 
