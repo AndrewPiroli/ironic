@@ -372,8 +372,8 @@ impl PpcBackend {
         }
 
         let payload_len = match req.cmd {
-            // HostWrite carries `len` bytes inline after the header.
-            Command::HostWrite => req.len as usize,
+            // These commands carry `len` bytes inline after the header.
+            Command::HostWrite | Command::DumpXfb => req.len as usize,
             // Raw PPC writes also carry the value inline after the header.
             Command::PPCWrite8 => 1,
             Command::PPCWrite16 => 2,
@@ -516,12 +516,10 @@ impl PpcBackend {
     }
 
     pub fn handle_dump_xfb(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
-        let bus = self.bus.read();
-        let bytes = bus.dump_xfb();
-        let mut pb = vec!(0u8; req.len as usize);
-        bus.dma_read(req.addr, &mut pb)?;
-        drop(bus);
-        let path = PathBuf::from(str::from_utf8(&pb)?);
+        let bytes = self.bus.read().dump_xfb();
+        let pathstr = str::from_utf8(&self.ibuf[0xc..(0xc + req.len as usize)])?;
+        let path = PathBuf::from(pathstr);
+        info!(target: "PPC", "Dumping XFB to {pathstr}");
         if let Err(e) = std::fs::write(path, &bytes) {
             let _ = client.write_all(b"F1");
             return Err(anyhow!(e));

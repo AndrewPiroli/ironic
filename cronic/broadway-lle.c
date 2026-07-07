@@ -496,7 +496,11 @@ Commands:\r\n\
 				\"ifetch\",\"decode\", \"branch\",\r\n\
 				\"loadstore\", \"cache\", or \"misc\", and\r\n\
 				[level] is one of \"debug\", \"verbose\",\r\n\
-				\"info\", \"warn\", or \"error\".");
+				\"info\", \"warn\", or \"error\".\r\n\
+\r\n\
+	xfbdump <path>		Dump the current XFB to <path>.\r\n\
+				If omitted, the path defaults to\r\n\
+				xfb.bmp.");
 }
 
 
@@ -896,6 +900,13 @@ static void debugger(struct ppcemu_state *emu) {
 		}
 
 		ppcemu_set_loglevel(source, level);
+	}
+	else if (!strcmp(cmd, "xfbdump")) {
+		arg = strtok(NULL, " ");
+		if (!arg)
+			arg = "xfb.bmp";
+
+		IPC_DumpXFB(arg);
 	}
 	else if (!strcmp(cmd, "r") || !strcmp(cmd, "run")) {
 		if (started) {

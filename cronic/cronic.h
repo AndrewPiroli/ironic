@@ -57,6 +57,6 @@ extern void IPC_Write(uint32_t addr, void *data, unsigned int len);
 extern void IPC_EnableFlipperIrqs(IPC_IrqCallback callback);
 extern void IPC_PollFlipperIrq(void);
 
-extern void IPC_DumpXFB(char* const path);
+extern void IPC_DumpXFB(char const* path);
 
 #endif /* _CRONIC_CRONIC_H */
