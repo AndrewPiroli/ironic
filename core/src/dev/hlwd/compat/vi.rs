@@ -501,7 +501,7 @@ impl Bus {
         let tfbl = (self.hlwd.vi.tfbl - 1) as usize;
         let mem1 = self.mem1.data.deref();
         // fixme resolution detection
-        const FIXME_LEN: usize = 61440;
+        const FIXME_LEN: usize = FIXME_WIDTH * FIXME_HEIGHT as usize * 2;
         const FIXME_HEIGHT: u32 = 480;
         const FIXME_WIDTH: usize = 640;
         let mut yuyv_bytes = vec![0u8;FIXME_LEN];
