@@ -32,6 +32,22 @@ pub fn mul(cpu: &mut Cpu, op: MulBits) -> DispatchRes {
     DispatchRes::RetireOk
 }
 
+pub fn mla(cpu: &mut Cpu, op: MlaBits) -> DispatchRes {
+    if op.rd() == 15 {
+        return DispatchRes::FatalErr(anyhow::anyhow!("mla can not use PC as destination register"));
+    }
+    let factor1 = cpu.reg[op.rn()] as u64;
+    let factor2 = cpu.reg[op.rm()] as u64;
+    let addend  = cpu.reg[op.ra()] as u64;
+    let val = ((factor1 * factor2 + addend) & 0xffffffff) as u32;
+    cpu.reg[op.rd()] = val;
+    if op.s() {
+        cpu.reg.cpsr.set_n((val & 0x8000_0000) != 0);
+        cpu.reg.cpsr.set_z(val == 0);
+    }
+    DispatchRes::RetireOk
+}
+
 pub fn umlal(cpu: &mut Cpu, op: SignedMlBits) -> DispatchRes {
     let rm_val = cpu.reg[op.rm()] as u64;
     let rn_val = cpu.reg[op.rn()] as u64;
