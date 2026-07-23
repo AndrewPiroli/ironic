@@ -6,6 +6,7 @@ use ironic_core::cpu::Cpu;
 use ironic_core::cpu::reg::CpuMode;
 use ironic_core::cpu::alu::*;
 use crate::bits::arm::*;
+use crate::interp::arm::branch::sign_extend;
 use crate::interp::DispatchRes;
 
 pub fn do_amode(rn: u32, imm: u32, u: bool, p: bool, w: bool) -> anyhow::Result<(u32, u32)> {
@@ -75,6 +76,27 @@ pub fn ldrb_reg(cpu: &mut Cpu, op: LsRegBits) -> DispatchRes {
         cpu.reg[op.rt()] = val as u32;
         DispatchRes::RetireOk
     }
+}
+
+pub fn ldrsb_imm(cpu: &mut Cpu, op: LsSignedImmBits) -> DispatchRes {
+    if op.rt() == 15 {
+        return DispatchRes::FatalErr(anyhow!("lsrdb can not use PC as destination register"));
+    }
+    let offset = (op.imm4h() << 4) | op.imm4l();
+    let (addr, wb_addr) = match do_amode(cpu.reg[op.rn()], offset, op.u(), op.p(), op.w()) {
+        Ok(val) => val,
+        Err(reason) => { return DispatchRes::FatalErr(reason); }
+    };
+    let uval = match cpu.read8(addr) {
+        Ok(val) => val,
+        Err(reason) => {
+            return DispatchRes::FatalErr(reason);
+        }
+    };
+    let val = sign_extend(uval as u32, 8, 32) as u32;
+    cpu.reg[op.rn()] = wb_addr;
+    cpu.reg[op.rt()] = val;
+    DispatchRes::RetireOk
 }
 
 

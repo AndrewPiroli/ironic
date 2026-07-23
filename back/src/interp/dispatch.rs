@@ -72,6 +72,7 @@ impl ArmFn {
 
             LdrImm      => ArmFn(afn!(arm::loadstore::ldr_imm)),
             LdrbImm     => ArmFn(afn!(arm::loadstore::ldrb_imm)),
+            LdrsbImm    => ArmFn(afn!(arm::loadstore::ldrsb_imm)),
             LdrhImm     => ArmFn(afn!(arm::loadstore::ldrh_imm)),
             LdrhReg     => ArmFn(afn!(arm::loadstore::ldrh_reg)),
             SubImm      => ArmFn(afn!(arm::dataproc::sub_imm)),
