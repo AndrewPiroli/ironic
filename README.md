@@ -35,13 +35,13 @@ Support for Windows is provided on best-effort basis. For technical reasons, min
 
 ## Compatibility matrix
 Rough matrix of what software versions get to what stages in the boot process
-| Software Versions                    | past boot1? | past boot2? | into IOS? | Notes                                                                                                                                                              |
-|--------------------------------------|-------------|-------------|-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 4.3U, boot1d, boot2v4                | Yes         | Yes         | Yes       | None                                                                                                                                                               |
-| 4.3U, boot1b, boot2v4                | Yes         | Yes         | Yes       | None                                                                                                                                                               |
-| 4.3U, boot1c, boot2v4                | Yes         | Yes         | Yes       | None                                                                                                                                                               |
-| 4.3U, boot1b, BootMii/boot2, boot2v4 | Yes         | No          | N/A       | Missing some debug port writes in BootMii somehow<br>Booting into MINI from SD Card results in a crash<br>BootMii's fallback to boot2 results in crash (different) |
-| TODO: More results                   |             |             |           |                                                                                                                                                                    |
+| Software Versions              | past boot1? | past boot2? | into IOS? | Notes        |
+|--------------------------------|-------------|-------------|-----------|--------------|
+| boot1b, boot2v4 (No BootMii)   | Yes         | Yes         | Yes       | None         |
+| boot1b, boot2v4 with BootMii   | Yes         | Yes         | Yes       | None         |
+| boot1c, boot2v4                | Yes         | Yes         | Yes       | None         |
+| boot1d, boot2v4                | Yes         | Yes         | Yes       | None         |
+| TODO: More results             |             |             |           |              |
 
 ## Contributing
 Contributions are welcome from all free persons. The original repo did not specify a license other than
