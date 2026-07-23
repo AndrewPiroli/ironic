@@ -1,7 +1,7 @@
 //! Load/store instructions.
 
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use ironic_core::cpu::Cpu;
 use ironic_core::cpu::reg::CpuMode;
 use ironic_core::cpu::alu::*;
@@ -439,6 +439,34 @@ pub fn stmdb(cpu: &mut Cpu, op: LsMultiBits) -> DispatchRes {
     let reglist = op.register_list();
     let mut addr = cpu.reg[op.rn()] - (reglist.count_ones() * 4);
     let wb_addr = addr;
+
+    for i in 0..16 {
+        if (reglist & (1 << i)) != 0 {
+            let val = if i == 15 {
+                cpu.read_exec_pc()
+            } else {
+                cpu.reg[i as u32]
+            };
+            match cpu.write32(addr, val)  {
+                Ok(_) => {},
+                Err(reason) => { return DispatchRes::FatalErr(reason); }
+            };
+            addr += 4;
+        }
+    }
+    if op.w() { 
+        cpu.reg[op.rn()] = wb_addr;
+    }
+    DispatchRes::RetireOk
+}
+
+pub fn stmib(cpu: &mut Cpu, op: LsMultiBits) -> DispatchRes {
+    if op.rn() == 15 {
+        return DispatchRes::FatalErr(anyhow!("stmib can not use PC as base register"));
+    }
+    let reglist = op.register_list();
+    let mut addr = cpu.reg[op.rn()] + 4;
+    let wb_addr = cpu.reg[op.rn()] + (reglist.count_ones() * 4);
 
     for i in 0..16 {
         if (reglist & (1 << i)) != 0 {

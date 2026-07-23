@@ -89,6 +89,7 @@ impl ArmFn {
             StrImm      => ArmFn(afn!(arm::loadstore::str_imm)),
             StrbImm     => ArmFn(afn!(arm::loadstore::strb_imm)),
             Stmdb       => ArmFn(afn!(arm::loadstore::stmdb)),
+            Stmib       => ArmFn(afn!(arm::loadstore::stmib)),
             Stm         => ArmFn(afn!(arm::loadstore::stm)),
             StmRegUser  => ArmFn(afn!(arm::loadstore::stm_user)),
             StrhImm     => ArmFn(afn!(arm::loadstore::strh_imm)),
