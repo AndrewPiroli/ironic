@@ -51,6 +51,33 @@ pub fn ldrb_imm(cpu: &mut Cpu, op: LsImmBits) -> DispatchRes {
     DispatchRes::RetireOk
 }
 
+pub fn ldrb_reg(cpu: &mut Cpu, op: LsRegBits) -> DispatchRes {
+    let (offset, _) = barrel_shift(ShiftArgs::Reg { rm: cpu.reg[op.rm()],
+        stype: op.stype(), imm5: op.imm5(), c_in: cpu.reg.cpsr.c()
+    });
+
+    let (addr, wb_addr) = match do_amode(cpu.reg[op.rn()],
+        offset, op.u(), op.p(), op.w()) {
+            Ok(val) => val,
+            Err(reason) => { return DispatchRes::FatalErr(reason); }
+    };
+    let val = match cpu.read8(addr) {
+        Ok(val) => val,
+        Err(reason) => {
+            return DispatchRes::FatalErr(reason);
+        }
+    };
+
+    cpu.reg[op.rn()] = wb_addr;
+    if op.rt() == 15 {
+        DispatchRes::FatalErr(anyhow::anyhow!("ldrb refusing to load 8 bit value into PC"))
+    } else {
+        cpu.reg[op.rt()] = val as u32;
+        DispatchRes::RetireOk
+    }
+}
+
+
 pub fn ldrh_imm(cpu: &mut Cpu, op: LsSignedImmBits) -> DispatchRes {
     assert_ne!(op.rt(), 15);
     let offset = (op.imm4h() << 4) | op.imm4l();
@@ -126,8 +153,26 @@ pub fn strb_imm(cpu: &mut Cpu, op: LsImmBits) -> DispatchRes {
     }
 }
 
+pub fn strb_reg(cpu: &mut Cpu, op: LsRegBits) -> DispatchRes {
+    let (offset, _) = barrel_shift(ShiftArgs::Reg { rm: cpu.reg[op.rm()],
+        stype: op.stype(), imm5: op.imm5(), c_in: cpu.reg.cpsr.c()
+    });
 
+    let (addr, wb_addr) = match do_amode(cpu.reg[op.rn()],
+        offset, op.u(), op.p(), op.w()){
+            Ok(val) => val,
+            Err(reason) => { return DispatchRes::FatalErr(reason); }
+        };
 
+    let val = cpu.reg[op.rt()];
+    match cpu.write8(addr, val) {
+        Ok(_) => {
+            cpu.reg[op.rn()] = wb_addr;
+            DispatchRes::RetireOk
+        },
+        Err(reason) => DispatchRes::FatalErr(reason)
+    }
+}
 
 pub fn ldr_reg(cpu: &mut Cpu, op: LsRegBits) -> DispatchRes {
     let (offset, _) = barrel_shift(ShiftArgs::Reg { rm: cpu.reg[op.rm()],

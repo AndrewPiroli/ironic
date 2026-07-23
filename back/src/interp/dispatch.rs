@@ -76,7 +76,9 @@ impl ArmFn {
             SubReg      => ArmFn(afn!(arm::dataproc::sub_reg)),
 
             LdrReg      => ArmFn(afn!(arm::loadstore::ldr_reg)),
+            LdrbReg     => ArmFn(afn!(arm::loadstore::ldrb_reg)),
             StrReg      => ArmFn(afn!(arm::loadstore::str_reg)),
+            StrbReg     => ArmFn(afn!(arm::loadstore::strb_reg)),
 
             Ldmib       => ArmFn(afn!(arm::loadstore::ldmib)),
             Ldm         => ArmFn(afn!(arm::loadstore::ldmia)),
