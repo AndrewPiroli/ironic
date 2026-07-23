@@ -430,7 +430,7 @@ impl CsdReg {
                 if total_blocks % mult != 0 {
                     continue;
                 }
-                let cs = (total_blocks / mult) - 1; // C_SIZE = BLOCKNR/MULT - 1
+                let cs = (total_blocks / mult).saturating_sub(1); // C_SIZE = BLOCKNR/MULT - 1
                 if cs <= 0xFFF { // C_SIZE fits in 12 bits
                     read_bl_len = bl_len as u128;
                     c_size = cs as u128;
