@@ -300,6 +300,7 @@ impl MmioDevice for Hollywood {
     fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x000..=0x00c => self.ipc.write_handler(off, val)?,
+             0x010 => { self.timer.timer = val; },
             0x014 => {
                 info!(target: "HLWD", "alarm={val:08x} (timer={:08x})", self.timer.timer);
                 self.timer.alarm = val;
