@@ -1,6 +1,11 @@
 pub mod device;
 use anyhow::bail;
+use log::warn;
 use device::*;
+use device::sdgecko::*;
+use device::usbgecko::*;
+use device::rtc::*;
+use device::memorycard::*;
 
 use crate::bus::mmio::*;
 use crate::bus::prim::*;
@@ -27,7 +32,7 @@ impl From<u32> for EXIFreq {
 }
 
 /// Representing an EXI transfer type.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EXITransfer {
     Read, Write, ReadWrite, Undef,
 }
@@ -35,15 +40,22 @@ impl From<u32> for EXITransfer {
     fn from(x: u32) -> Self {
         match x {
             0b00 => Self::Read,
-            0b10 => Self::Write,
-            0b01 => Self::ReadWrite,
+            0b01 => Self::Write,
+            0b10 => Self::ReadWrite,
             0b11 => Self::Undef,
             _ => unreachable!(),
         }
     }
 }
 
-/// Container for the state associated with an EXI channel, determined by the 
+#[derive(Debug, Clone, Copy)]
+pub enum EXIChannelAction {
+    None,
+    ImmediateTransfer(EXITransferRequest),
+    DmaTransfer,
+}
+
+/// Container for the state associated with an EXI channel, determined by the
 /// current value of the channel's status and control registers.
 #[derive(Debug, Clone, Copy)]
 pub struct ChannelState {
@@ -55,7 +67,9 @@ pub struct ChannelState {
     /// External Insertion Interrupt Mask
     pub ext_msk: bool,
 
-    /// Currently-selected EXI device
+    /// Currently-selected EXI chip-select, if any.
+    pub cs: Option<usize>,
+    /// The logical device mapped to the selected chip-select.
     pub dev: Option<EXIDeviceKind>,
     /// Channel clock frequency
     pub clk: EXIFreq,
@@ -79,7 +93,17 @@ pub struct ChannelState {
     /// Transfer status bit
     pub transfer: bool,
 }
+
 impl ChannelState {
+    fn decode_cs(sts: u32) -> Option<usize> {
+        match (sts & 0x0000_0380) >> 7 {
+            0b001 => Some(0),
+            0b010 => Some(1),
+            0b100 => Some(2),
+            _ => None,
+        }
+    }
+
     fn from_chn(chn: usize, sts: u32, ctrl: u32) -> Self {
         // Status register bits
         let ext     = sts & 0x0000_1000 != 0;
@@ -90,18 +114,19 @@ impl ChannelState {
         let exi_int = sts & 0x0000_0002 != 0;
         let exi_msk = sts & 0x0000_0001 != 0;
 
-        let dev     = EXIDeviceKind::resolve(chn, (sts & 0x0000_0380) >> 7);
+        let cs      = Self::decode_cs(sts);
+        let dev     = cs.and_then(|cs| EXIDeviceKind::resolve(chn, cs));
         let clk     = EXIFreq::from((sts & 0x0000_0070) >> 4);
 
-        // Control register bits
-        let imm_len = (ctrl & 0x0000_0030) >> 4;
-        let transfer_type = EXITransfer::from((ctrl& 0x0000_000c) >> 2);
+        // Control register bits.
+        let imm_len = ((ctrl & 0x0000_0030) >> 4) + 1;
+        let transfer_type = EXITransfer::from((ctrl & 0x0000_000c) >> 2);
         let dma = ctrl & 0x0000_0002 != 0;
         let transfer = ctrl & 0x0000_0001 != 0;
 
         ChannelState {
             ext, ext_int, ext_msk, 
-            dev, clk, 
+            cs, dev, clk,
             tc_int, tc_msk, 
             exi_int, exi_msk,
             imm_len, transfer_type, dma, transfer
@@ -127,12 +152,26 @@ pub struct EXIChannel {
     /// Channel state
     pub state: ChannelState,
 }
+
 impl EXIChannel {
     pub fn new(idx: usize) -> Self {
         EXIChannel {
             idx, csr: 0, mar: 0, len: 0, data: 0, ctrl: 0,
             state: ChannelState::from_chn(idx, 0, 0),
         }
+    }
+
+    fn update_state(&mut self) {
+        self.state = ChannelState::from_chn(self.idx, self.csr, self.ctrl);
+    }
+
+    fn update_csr_device_bits(&mut self, has_device: bool) {
+        if has_device {
+            self.csr |= 0x0000_1000;
+        } else {
+            self.csr &= !0x0000_1000;
+        }
+        self.update_state();
     }
 }
 
@@ -145,52 +184,58 @@ impl EXIChannel {
             0x08 => self.len,
             0x0c => self.ctrl,
             0x10 => self.data,
-            _ => { bail!("EXI chn{} OOB read at {off:08x}", self.idx); },
+            _ => bail!("EXI chn{} OOB read at {off:08x}", self.idx),
         };
         log::debug!(target: "EXI", "chn{} read {res:08x} from offset {off:x}", self.idx);
         Ok(res)
     }
-    pub fn write(&mut self, off: usize, val: u32) -> anyhow::Result<()> {
+
+    pub fn write(&mut self, off: usize, val: u32) -> anyhow::Result<EXIChannelAction> {
         log::debug!(target: "EXI", "chn{} write {val:08x} at {off:08x}", self.idx);
         match off {
-            0x00 => {
-                self.csr = val;
-                self.update_state();
-            }
+            0x00 => self.csr = val,
             0x04 => self.mar = val,
             0x08 => self.len = val,
-            0x0c => {
-                self.ctrl = val;
-                self.update_state();
-            },
+            0x0c => self.ctrl = val,
             0x10 => self.data = val,
-            _ => { bail!("EXI chn{} OOB write {val:08x} at {off:08x}",
-                self.idx); },
+            _ => bail!("EXI chn{} OOB write {val:08x} at {off:08x}", self.idx),
         }
-        Ok(())
-    }
 
-    pub fn update_state(&mut self) {
-        self.state = ChannelState::from_chn(self.idx, self.csr, self.ctrl);
+        self.update_state();
 
-        if self.state.transfer {
-            // FIXME: implement EXI transfers to something (literally anything)
-            self.ctrl &= !1;
-            log::error!(target: "EXI", "Transfer swallowed!");
+        if !matches!(off, 0x00 | 0x0c) || !self.state.transfer {
+            return Ok(EXIChannelAction::None);
         }
+
+        self.ctrl &= !1;
+        self.update_state();
+
+        if self.state.dma {
+            return Ok(EXIChannelAction::DmaTransfer);
+        }
+
+        let Some(cs) = self.state.cs else {
+            return Ok(EXIChannelAction::None);
+        };
+
+        Ok(EXIChannelAction::ImmediateTransfer(EXITransferRequest {
+            channel: self.idx,
+            cs,
+            len: self.state.imm_len,
+            kind: self.state.transfer_type,
+            data: self.data,
+            clk: self.state.clk,
+        }))
     }
 }
-
 
 /// Legacy external interface (EXI).
 #[derive(Debug, Clone)]
 pub struct EXInterface {
-    /// EXI Channel 0 state
-    pub chan0: Box<EXIChannel>,
-    /// EXI Channel 1 state
-    pub chan1: Box<EXIChannel>,
-    /// EXI Channel 2 state
-    pub chan2: Box<EXIChannel>,
+    /// EXI channel state
+    pub channels: [EXIChannel; 3],
+    /// Attached EXI devices by [channel][chip-select]
+    pub devices: [[EXIDeviceSlot; 3]; 3],
     /// Buffer for Broadway bootstrap instructions
     pub ppc_bootstrap: Box<[u32; 0x10]>,
 }
@@ -202,42 +247,79 @@ impl Default for EXInterface {
 }
 
 impl EXInterface {
+    fn build_devices() -> [[EXIDeviceSlot; 3]; 3] {
+        let mut devices = std::array::from_fn(|_| std::array::from_fn(|_| EXIDeviceSlot::None));
+
+        devices[0][0] = EXIDeviceSlot::MemoryCard(MemoryCardDevice);
+        devices[0][1] = EXIDeviceSlot::Rtc(RtcDevice);
+        devices[1][0] = EXIDeviceSlot::UsbGecko(UsbGeckoDevice::default());
+        devices[2][0] = EXIDeviceSlot::SdGecko(SdGeckoDevice);
+
+        devices
+    }
+
     pub fn new() -> Self {
-        EXInterface {
-            chan0: Box::new(EXIChannel::new(0)),
-            chan1: Box::new(EXIChannel::new(1)),
-            chan2: Box::new(EXIChannel::new(2)),
+        let devices = Self::build_devices();
+        let mut exi = Self {
+            channels: [EXIChannel::new(0), EXIChannel::new(1), EXIChannel::new(2)],
+            devices,
             ppc_bootstrap: Box::new([0; 0x10]),
+        };
+        exi.refresh_presence_bits();
+        exi
+    }
+
+    fn refresh_presence_bits(&mut self) {
+        for channel_idx in 0..self.channels.len() {
+            let has_device = self.devices[channel_idx][0].kind().is_some();
+            self.channels[channel_idx].update_csr_device_bits(has_device);
         }
+    }
+
+    fn route_action(&mut self, action: EXIChannelAction) -> anyhow::Result<()> {
+        match action {
+            EXIChannelAction::None => Ok(()),
+            EXIChannelAction::DmaTransfer => {
+                warn!(target: "EXI", "EXI DMA transfers are not supported yet");
+                Ok(())
+            },
+            EXIChannelAction::ImmediateTransfer(req) => {
+                let result = self.devices[req.channel][req.cs].transfer_imm(req)?;
+                self.channels[req.channel].data = result;
+                Ok(())
+            }
+        }
+    }
+
+    fn write_channel(&mut self, channel_idx: usize, off: usize, val: u32) -> anyhow::Result<()> {
+        let action = self.channels[channel_idx].write(off, val)?;
+        self.refresh_presence_bits();
+        self.route_action(action)
     }
 }
 
-
 impl MmioDevice for EXInterface {
     type Width = u32;
+
     fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
-            0x00..=0x10 => self.chan0.read(off)?,
-            0x14..=0x24 => self.chan1.read(off - 0x14)?,
-            0x28..=0x38 => self.chan2.read(off - 0x28)?,
-
-            0x40..=0x7c => self.ppc_bootstrap[(off - 0x40)/4],
-            _ => { bail!("EXI read to undef offset {off:x}"); },
+            0x00..=0x10 => self.channels[0].read(off)?,
+            0x14..=0x24 => self.channels[1].read(off - 0x14)?,
+            0x28..=0x38 => self.channels[2].read(off - 0x28)?,
+            0x40..=0x7c => self.ppc_bootstrap[(off - 0x40) / 4],
+            _ => bail!("EXI read to undef offset {off:x}"),
         };
         Ok(BusPacket::Word(val))
     }
+
     fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
-        match off { 
-            0x00..=0x10 => self.chan0.write(off, val)?,
-            0x14..=0x24 => self.chan1.write(off - 0x14, val)?,
-            0x28..=0x38 => self.chan2.write(off - 0x28, val)?,
-
-
-            0x40..=0x7c => self.ppc_bootstrap[(off - 0x40)/4] = val,
-            _ => { bail!("EXI write {val:08x} to {off:x}"); },
+        match off {
+            0x00..=0x10 => self.write_channel(0, off, val)?,
+            0x14..=0x24 => self.write_channel(1, off - 0x14, val)?,
+            0x28..=0x38 => self.write_channel(2, off - 0x28, val)?,
+            0x40..=0x7c => self.ppc_bootstrap[(off - 0x40) / 4] = val,
+            _ => bail!("EXI write {val:08x} to {off:x}"),
         }
         Ok(None)
     }
 }
-
-
