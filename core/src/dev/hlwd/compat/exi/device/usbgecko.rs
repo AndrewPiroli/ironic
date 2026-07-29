@@ -3,7 +3,8 @@ use std::collections::VecDeque;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -49,7 +50,7 @@ impl UsbGeckoDevice {
             // Read a byte (host-to-guest). Bit 27 == success, with the
             // received byte in bits 23:16 see: libogc `gecko_recvbyte`
             0xa => {
-                let byte = self.bridge.rx.lock().unwrap().pop_front();
+                let byte = self.bridge.rx.lock().pop_front();
                 match byte {
                     Some(b) => Ok(0x0800_0000 | ((b as u32) << 16)),
                     None => Ok(0x0000_0000),
@@ -60,7 +61,7 @@ impl UsbGeckoDevice {
             0xb => {
                 let b = ((req.data & 0x0ff0_0000) >> 20) as u8;
                 if self.bridge.connected.load(Ordering::Relaxed) {
-                    let mut tx = self.bridge.tx.lock().unwrap();
+                    let mut tx = self.bridge.tx.lock();
                     if tx.len() < TX_FIFO_CAP {
                         tx.push_back(b);
                     } else { // warning?
@@ -75,7 +76,7 @@ impl UsbGeckoDevice {
             // Check if TX FIFO is ready (it always is here)
             0xc => Ok(0x0400_0000), 
             // Check if RX FIFO is ready: bit 26 set when data is available
-            0xd => Ok((!self.bridge.rx.lock().unwrap().is_empty() as u32) << 26),
+            0xd => Ok((!self.bridge.rx.lock().is_empty() as u32) << 26),
             _ => {
                 warn!(target: "UG", "Unrecognized USB Gecko command: {cmd:x}");
                 Ok(0x0000_0000)
@@ -129,14 +130,14 @@ impl UsbGeckoDevice {
         loop {
             // TX first
             let pending: Vec<u8> = { // FIXME: don't alloc here every time
-                let mut tx = bridge.tx.lock().unwrap();
+                let mut tx = bridge.tx.lock();
                 tx.drain(..).collect()
             };
             if !pending.is_empty() {
                 stream.write_all(&pending)?;
             }
 
-            let space = RX_FIFO_CAP.saturating_sub(bridge.rx.lock().unwrap().len());
+            let space = RX_FIFO_CAP.saturating_sub(bridge.rx.lock().len());
             if space == 0 {
                 // shouldn't really happen that much but FIXME don't sleep in IO threads
                 std::thread::sleep(Duration::from_millis(5));
@@ -146,7 +147,7 @@ impl UsbGeckoDevice {
             match stream.read(&mut buf[..max]) {
                 Ok(0) => return Ok(()),
                 Ok(n) => {
-                    let mut rx = bridge.rx.lock().unwrap();
+                    let mut rx = bridge.rx.lock();
                     rx.extend(&buf[..n]);
                 },
                 Err(e) if matches!(e.kind(),
