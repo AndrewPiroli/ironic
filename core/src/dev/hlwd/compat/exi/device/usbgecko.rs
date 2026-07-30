@@ -17,7 +17,7 @@ const TX_FIFO_CAP: usize = 0x10000;
 const RX_FIFO_CAP: usize = 0x1000;
 
 #[derive(Debug, Default)]
-pub struct UsbGeckoBridge {
+pub(crate) struct UsbGeckoBridge {
     /// Guest-to-host FIFO
     tx: Mutex<VecDeque<u8>>,
     /// Host-to-guest FIFO

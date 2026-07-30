@@ -1,8 +1,8 @@
 use super::{EXIFreq, EXITransfer};
-pub mod sdgecko;
-pub mod usbgecko;
-pub mod rtc;
-pub mod memorycard;
+pub(super) mod sdgecko;
+pub(super) mod usbgecko;
+pub(super) mod rtc;
+pub(super) mod memorycard;
 use sdgecko::*;
 use usbgecko::*;
 use rtc::*;

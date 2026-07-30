@@ -4,7 +4,7 @@ use addr2line::Context;
 use gimli::BigEndian;
 use gimli::EndianSlice;
 use ironic_core::bus::*;
-use ironic_core::dev::hlwd::compat::exi::device::usbgecko::UsbGeckoDevice;
+use ironic_core::dev::hlwd::compat::exi::UsbGeckoDevice;
 use ironic_core::dev::hlwd::compat::vi::VideoInterface;
 use ironic_backend::interp::*;
 use ironic_backend::back::*;

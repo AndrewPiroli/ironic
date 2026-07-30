@@ -2,10 +2,10 @@ pub mod device;
 use anyhow::bail;
 use log::warn;
 use device::*;
-use device::sdgecko::*;
-use device::usbgecko::*;
-use device::rtc::*;
-use device::memorycard::*;
+pub use device::sdgecko::*;
+pub use device::usbgecko::*;
+pub use device::rtc::*;
+pub use device::memorycard::*;
 
 use crate::bus::mmio::*;
 use crate::bus::prim::*;
