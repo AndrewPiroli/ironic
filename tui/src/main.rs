@@ -35,6 +35,9 @@ struct Args {
     /// Enable the PPC HLE server (default = False)
     #[clap(short, long)]
     ppc_hle: bool,
+    /// Enable the PPC LLE system (default = False)
+    #[clap(short, long)]
+    ppc_lle: bool,
     /// Attach an emulated USB Gecko whose serial stream is
     /// served over TCP on 127.0.0.1 port 55021 by default
     /// When this flag is absent, guest software sees an empty slot.
