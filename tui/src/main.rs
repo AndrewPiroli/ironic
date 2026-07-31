@@ -9,6 +9,7 @@ use ironic_core::dev::hlwd::compat::vi::VideoInterface;
 use ironic_backend::interp::*;
 use ironic_backend::back::*;
 use ironic_backend::ppc::*;
+use ironic_backend::ppclle::PpcEmu;
 use log::info;
 use log::{debug, error};
 use parking_lot::RwLock;
@@ -45,6 +46,12 @@ struct Args {
     /// Enable the PPC HLE server (default = False)
     #[clap(short, long)]
     ppc_hle: bool,
+    /// Enable the PPC LLE system (default = False)
+    #[clap(short, long)]
+    ppc_lle: bool,
+    /// Path to a PPC ELF for the PPC LLE backend
+    #[clap(long)]
+    ppc_kernel: Option<PathBuf>,
     /// Permanently disable the ARM instruction cache, regardless of CP15 or IPC
     #[clap(long)]
     no_cache: bool,
@@ -62,6 +69,8 @@ fn main() -> anyhow::Result<()> {
     let mut args = Args::parse();
     let custom_kernel = args.custom_kernel.clone();
     let enable_ppc_hle = args.ppc_hle;
+    let enable_ppc_lle = args.ppc_lle;
+    let ppc_kernel = args.ppc_kernel.clone();
 
     args.logging.make_ascii_uppercase();
 
@@ -196,6 +205,17 @@ fn main() -> anyhow::Result<()> {
             let mut back = PpcBackend::new(ppc_bus);
             if let Err(reason) = back.run(){
                 println!("PPC Backend returned an Err: {reason}");
+            };
+        }).unwrap());
+    }
+
+    // Fork off the PPC LLE (libppcemu, in-process) thread
+    if enable_ppc_lle {
+        let ppc_bus = bus.clone();
+        let _ = Some(Builder::new().name("PpcLleThread".to_owned()).spawn(move || {
+            let mut back = PpcEmu::new(ppc_bus, ppc_kernel);
+            if let Err(reason) = back.run() {
+                println!("PPC LLE backend returned an Err: {reason}");
             };
         }).unwrap());
     }
