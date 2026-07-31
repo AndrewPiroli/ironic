@@ -1,5 +1,14 @@
 use anyhow::bail;
 use log::{debug, error};
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct IrqCallback(pub Arc<dyn Fn(bool) + Send + Sync>);
+impl std::fmt::Debug for IrqCallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<ppc irq callback>")
+    }
+}
 
 
 #[derive(Debug, Copy, Clone)]
