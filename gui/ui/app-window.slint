@@ -13,11 +13,24 @@ export component AppWindow inherits Window {
     preferred-height: 600px;
 
     in-out property <[LogDesc]> logs;
+    in-out property <bool> running: false;
+
+    callback start-emu();
+
+    // Called from Rust after new rows are appended to `logs`.
+    public function scroll-to-bottom() {
+        arm.scroll-to-bottom();
+    }
+
     VerticalBox {
         TabWidget {
             Tab {
                 title: "ARM Emulation";
-                ArmEmu { logs: logs; }
+                arm := ArmEmu {
+                    logs: root.logs;
+                    running: root.running;
+                    start-emu => { root.start-emu(); }
+                }
             }
             Tab {
                 title: "PPC Emulation";
