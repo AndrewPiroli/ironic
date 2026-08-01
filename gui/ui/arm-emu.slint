@@ -1,0 +1,52 @@
+import { GroupBox, VerticalBox, HorizontalBox, Button, ListView, StandardListView } from "std-widgets.slint";
+export component LogItem inherits Rectangle {
+    in property <string> facility;
+    in property <string> level;
+    in property <string> txt;
+    HorizontalBox {
+        Text {
+            height: 100%;
+            width: 20%;
+            text: facility;
+        }
+        Text {
+            height: 100%;
+            width: 20%;
+            text: level;
+        }
+        Text {
+            height: 100%;
+            width: 40%;
+            text: txt;
+        }
+    }
+}
+export struct LogDesc {
+    facility: string,
+    level: string,
+    txt: string,
+}
+
+export component ArmEmu inherits GroupBox {
+    title: "Arm Emulation";
+    height: 100%;
+    width: 100%;
+    in property <[LogDesc]> logs;
+    VerticalBox {
+        HorizontalBox {
+            Button {
+                text: "Start";
+            }
+        }
+        ListView {
+            width: 100%;
+            enabled: false;
+            for asdf in logs : LogItem {
+                facility: asdf.facility;
+                level: asdf.level;
+                txt: asdf.txt;
+            }
+        }
+    }
+}
+
