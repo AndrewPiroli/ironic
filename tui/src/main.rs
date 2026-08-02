@@ -1,23 +1,20 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use addr2line::Context;
-use gimli::BigEndian;
-use gimli::EndianSlice;
 use ironic_core::bus::*;
 use ironic_core::dev::hlwd::compat::exi::UsbGeckoDevice;
 use ironic_core::dev::hlwd::compat::vi::VideoInterface;
+use ironic_core::logtarget::LogTarget;
+use ironic_backend::cleanup;
 use ironic_backend::interp::*;
 use ironic_backend::back::*;
 use ironic_backend::ppc::*;
-use log::info;
-use log::{debug, error};
-use strum::VariantNames;
+use log::debug;
 use parking_lot::RwLock;
 
 use std::process;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::thread::Builder;
-use std::time::Duration;
 
 use clap::Parser;
 
@@ -77,72 +74,14 @@ fn main() -> anyhow::Result<()> {
 
     // Setup panic hook
     // We try to avoid panics inside the emulator, but it can happen so try to dump guest memory.
-    let panic_bus = bus.clone();
-    let orig_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info|{
-        'attempt_fancy_crashdump: {
-            // We only care if the emulator thread crashes, so check the thread name and see whodunnit
-            let thread = std::thread::current();
-            if thread.name() == Some("EmuThread") {
-                let bus = match panic_bus.try_read_for(Duration::new(3, 0)) {
-                    Some(b) => b,
-                    None => {
-                        println!("Failed to get the Bus lock in time, it's stuck!");
-                        println!("Unable to procede with a crash dump");
-                        break 'attempt_fancy_crashdump;
-                    },
-                };
-                // Dump emulator memory.
-                println!("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
-                match bus.dump_memory("crash.bin") {
-                    Ok(p) => println!("Emulator crashed! Dumped RAM to {}/*.crash.bin", p.to_string_lossy()),
-                    Err(e) => println!("Emulator crashed! Failed to dump RAM: {e}"),
-                }
-                println!("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
-                match bus.nand.data.dump_writes() {
-                    Ok(_) => println!("NAND WRITES DUMPED TO {}", bus.nand.data.write_index),
-                    Err(e) => println!("FAILED TO DUMP NAND WRITE DATA: {e}"),
-                }
-                // Attempt a debuginfo enhanced crashdump.
-                if bus.debuginfo.debuginfo.is_none() {
-                    println!("Debug location never saved to bus, can not continue crashdump");
-                    break 'attempt_fancy_crashdump;
-                }
-                let pc = bus.debuginfo.last_pc.unwrap();
-                let lr = bus.debuginfo.last_lr.unwrap();
-                let _sp = bus.debuginfo.last_sp.unwrap();
-                if let Some(ref debuginfo) = bus.debuginfo.debuginfo {
-                    #[allow(deprecated)] // God these 2 crates are stupid
-                    let debuginfo_b = debuginfo.borrow(|section|{
-                        EndianSlice::new(section, BigEndian)
-                    });
-                    match addr2line::Context::from_dwarf(debuginfo_b) {
-                        Ok(addr2line_ctx) => {
-                            let _ = enhanced_crashdump(addr2line_ctx, pc, lr);
-                        },
-                        Err(err) => println!("Failed to initialize addr2line, cannot procede with crashdump! {err}"),
-                    }
-                }
-            }
-        }
-        orig_hook(panic_info);
-    }));
+    cleanup::install_panic_hook(&bus);
 
     // Setup Ctrl-C handler
     let ctrl_c_bus = bus.clone();
     ctrlc::set_handler(move ||{
         debug!(target: "MEMSAVE", "BEMemory Ctrl-C handler. Good luck!");
-        let bus = match ctrl_c_bus.try_read_for(Duration::new(5, 0)) {
-            Some(b) => b,
-            None => {
-                println!("Failed to unlock Bus in 5 seconds, it's stuck!");
-                println!("Unable to persist NAND writes, sorry.");
-                std::process::exit(0);
-            }
-        };
-        match bus.nand.data.dump_writes() {
-            Ok(_) => info!(target: "MEMSAVE", "NAND writes saved sucessfully"),
-            Err(e) => error!(target: "MEMSAVE", "NAND writes failed to save {e}"),
+        if let Some(bus) = cleanup::lock_for_cleanup(&ctrl_c_bus) {
+            cleanup::persist_nand_writes(&bus);
         }
         // We are now responsible for terminating the program
         // TODO: cleanup nicely?
@@ -172,48 +111,14 @@ fn main() -> anyhow::Result<()> {
 
     let _ = emu_thread.join();
 
+    // The interpreter has stopped
+    bus.read().shutdown.store(true, Ordering::Release);
+
     let bus_ref = bus.read();
-    match bus_ref.dump_memory("bin") {
-        Ok(path) => {
-            debug!(target: "Other", "Dumped ram to {}/*.bin", path.to_string_lossy())
-        }
-        Err(e) => {
-            error!(target: "Other", "Failed to dump ram: {e:?}");
-        }
-    }
-    match bus_ref.nand.data.dump_writes() {
-        Ok(_) => info!(target: "MEMSAVE", "NAND writes saved sucessfully"),
-        Err(e) => error!(target: "MEMSAVE", "NAND writes failed to save {e}"),
-    }
+    cleanup::persist_and_dump(&bus_ref, "bin");
     println!("Bus cycles elapsed: {}", bus_ref.cycle);
     process::exit(0);
 
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::AsRefStr, strum::Display, strum::VariantNames, strum::EnumString)]
-#[strum(ascii_case_insensitive)]
-#[allow(non_camel_case_types, clippy::upper_case_acronyms)]
-enum LogTarget {
-    AES,
-    DEBUG_PORT,
-    EXI,
-    HLWD,
-    IPC,
-    IRQ,
-    VI,
-    MEMSAVE,
-    NAND,
-    OTP,
-    PPC,
-    SDHC,
-    SEEPROM,
-    SHA,
-    SYSCALL,
-    SVC,
-    UG,
-    xHCI,
-    RTPATCH,
-    Other,
 }
 
 fn setup_logger(base_level: log::LevelFilter, target_level_overrides: &[(LogTarget, log::LevelFilter)]) -> anyhow::Result<()> {
@@ -221,7 +126,7 @@ fn setup_logger(base_level: log::LevelFilter, target_level_overrides: &[(LogTarg
     let colors = ColoredLevelConfig::default().debug(Color::Cyan).trace(Color::BrightCyan);
     let mut config = fern::Dispatch::new().level(base_level);
     for specific_override in target_level_overrides {
-        config = config.level_for(specific_override.0.to_string(), specific_override.1);
+        config = config.level_for(specific_override.0.as_log_str(), specific_override.1);
     }
     config = config.format(move |out, message, record| {
         if record.target() == "SVC" {
@@ -272,9 +177,9 @@ fn handle_logging_argument(log_string: String) -> anyhow::Result<()> {
             }
             else {
                 // parsing target failed
+                let valid: Vec<&str> = LogTarget::all().iter().map(|t| t.as_log_str()).collect();
                 anyhow::bail!(
-                    "Failed to parse --logging argument: Not a valid logging subsystem/target! You specified: \"{maybe_target}\"\nValid options are:\n{:#?}{LOGGING_EXAMPLE_TXT}",
-                    LogTarget::VARIANTS
+                    "Failed to parse --logging argument: Not a valid logging subsystem/target! You specified: \"{maybe_target}\"\nValid options are:\n{valid:#?}{LOGGING_EXAMPLE_TXT}"
                 );
             }
         }
@@ -285,24 +190,5 @@ fn handle_logging_argument(log_string: String) -> anyhow::Result<()> {
         anyhow::bail!(
             "Failed to parse --logging argument: Base-level must be `off`, `error`, `warn`, `info`, `debug`, or `trace`. You supplied \"{maybe_base_level}\"{LOGGING_EXAMPLE_TXT}"
         );
-    }
-}
-
-fn enhanced_crashdump(addr2line_ctx: Context<EndianSlice<BigEndian>>, pc: u32, lr: u32) -> anyhow::Result<()> {
-    // addr2line of PC and LR
-    {
-        let pc_line = addr2line_ctx.find_location(pc as u64).unwrap_or_default();
-        let lr_line = addr2line_ctx.find_location(lr as u64).unwrap_or_default();
-        println!("addr2line\nPC:{pc:08x} Loc:{}\nLR:{lr:08x} Loc:{}", fmt_location(pc_line), fmt_location(lr_line));
-    }
-    Ok(())
-}
-
-fn fmt_location(loc: Option<addr2line::Location>) -> String {
-    if let Some(real_loc) = loc {
-        format!("{}:{}:{}", real_loc.file.unwrap_or("??"), real_loc.line.unwrap_or(0), real_loc.column.unwrap_or(0))
-    }
-    else {
-        "??:0".to_owned()
     }
 }

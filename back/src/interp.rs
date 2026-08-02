@@ -12,6 +12,8 @@ use parking_lot::RwLock;
 
 use std::sync::Arc;
 use std::fs;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 extern crate elf;
@@ -92,12 +94,14 @@ pub struct InterpBackend {
     pub boot_status: BootStatus,
     pub custom_kernel: Option<String>,
     debugger_attached: bool,
+    shutdown: Arc<AtomicBool>,
 }
 impl InterpBackend {
     pub fn new(bus: Arc<RwLock<Bus>>, custom_kernel: Option<String>, ppc_early_on: bool) -> Self {
         if ppc_early_on {
             PPC_EARLY_ON.store(true, std::sync::atomic::Ordering::Release);
         }
+        let shutdown = bus.read().shutdown.clone();
         InterpBackend {
             svc_buf: String::new(),
             cpu: Cpu::new(bus.clone()),
@@ -107,6 +111,7 @@ impl InterpBackend {
             bus,
             custom_kernel,
             debugger_attached: false,
+            shutdown,
         }
     }
 }
@@ -425,6 +430,10 @@ impl Backend for InterpBackend {
             }
         }
         loop {
+            if self.shutdown.load(Ordering::Relaxed) {
+                info!(target: "Other", "Shutdown requested, stopping the interpreter");
+                break;
+            }
             // Take ownership of the bus to deal with any pending tasks
             {
                 let mut bus = self.bus.write();

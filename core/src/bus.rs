@@ -4,6 +4,8 @@ pub mod dispatch;
 pub mod mmio;
 pub mod task;
 use std::env::current_dir;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use crate::bus::task::*;
 
@@ -61,9 +63,15 @@ pub struct Bus {
     pub tasks: Vec<Task>,
     pub cycle: usize,
     pub debuginfo: Box<DebugInfo>,
+
+    pub shutdown: Arc<AtomicBool>,
 }
 impl Bus {
-    pub fn new()-> anyhow::Result<Self> {
+    pub fn new() -> anyhow::Result<Self> {
+        Bus::with_shutdown(Arc::new(AtomicBool::new(false)))
+    }
+
+    pub fn with_shutdown(shutdown: Arc<AtomicBool>) -> anyhow::Result<Self> {
         Ok(Bus {
             mrom: BigEndianMemory::new(0x0000_2000, Some("./boot0.bin"), false)?,
             sram0: BigEndianMemory::new(0x0001_0000, None, false)?,
@@ -86,6 +94,7 @@ impl Bus {
             tasks: Vec::new(),
             cycle: 0,
             debuginfo: Box::default(),
+            shutdown,
         })
     }
 

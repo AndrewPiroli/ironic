@@ -19,7 +19,7 @@ export component LogItem inherits Rectangle {
         padding-right: 4px;
 
         Text {
-            width: 90px;
+            width: 110px;
             vertical-alignment: center;
             overflow: elide;
             text: facility;
@@ -50,8 +50,12 @@ export component ArmEmu inherits GroupBox {
 
     in property <[LogDesc]> logs;
     in property <bool> running: false;
+    in property <bool> stopping: false;
+    in property <string> status: "Idle";
 
     callback start-emu();
+    callback stop-emu();
+    callback clear-logs();
 
     // Called from Rust after new rows are appended.
     public function scroll-to-bottom() {
@@ -66,13 +70,27 @@ export component ArmEmu inherits GroupBox {
             vertical-stretch: 0;
 
             Button {
-                text: root.running ? "Running..." : "Start";
-                enabled: !root.running;
+                text: "Start";
+                enabled: !root.running && !root.stopping;
+                primary: !root.running;
                 clicked => { root.start-emu(); }
+            }
+            Button {
+                text: "Stop";
+                enabled: root.running && !root.stopping;
+                clicked => { root.stop-emu(); }
+            }
+            Button {
+                text: "Clear log";
+                clicked => { root.clear-logs(); }
             }
             follow := CheckBox {
                 text: "Follow log";
                 checked: true;
+            }
+            Text {
+                vertical-alignment: center;
+                text: root.status;
             }
         }
 
@@ -80,7 +98,7 @@ export component ArmEmu inherits GroupBox {
             width: 100%;
             vertical-stretch: 1;
 
-            for entry in root.logs : LogItem {
+            for entry in root.logs: LogItem {
                 facility: entry.facility;
                 level: entry.level;
                 txt: entry.txt;

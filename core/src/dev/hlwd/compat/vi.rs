@@ -3,6 +3,7 @@ use log::{debug, info, warn};
 use parking_lot::RwLock;
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::thread::{self, Builder, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -136,8 +137,9 @@ impl DisplayInterrupt {
 
 impl VideoInterface {
     pub fn spawn_irq_thread(bus: Arc<RwLock<Bus>>) -> std::io::Result<JoinHandle<()>> {
+        let shutdown = bus.read().shutdown.clone();
         Builder::new().name("ViThread".to_owned()).spawn(move || {
-            loop {
+            while !shutdown.load(Ordering::Relaxed) {
                 let (frame_duration, frame_lines, mut interrupts) = {
                     let bus = bus.read();
                     let frame_duration = bus.hlwd.vi.frame_duration();
@@ -150,6 +152,9 @@ impl VideoInterface {
                 interrupts.sort_by_key(|di| di.frame_offset(frame_duration, frame_lines));
 
                 for di in interrupts {
+                    if shutdown.load(Ordering::Relaxed) {
+                        break;
+                    }
                     let event_at = frame_start + di.frame_offset(frame_duration, frame_lines);
                     if let Some(delay) = event_at.checked_duration_since(Instant::now()) {
                         thread::sleep(delay);
@@ -166,6 +171,7 @@ impl VideoInterface {
                     thread::sleep(delay);
                 }
             }
+            debug!(target: "VI", "VI IRQ thread stopping");
         })
     }
 

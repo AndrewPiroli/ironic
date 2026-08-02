@@ -1,5 +1,5 @@
 import { Button, VerticalBox, TabWidget, AboutSlint, GridBox, GroupBox, Spinner } from "std-widgets.slint";
-import { OptionsPane } from "options-pane.slint";
+import { OptionsPane, LogOptionDesc } from "options-pane.slint";
 import { ArmEmu, LogDesc } from "arm-emu.slint";
 
 component WipView inherits GroupBox {
@@ -14,8 +14,17 @@ export component AppWindow inherits Window {
 
     in-out property <[LogDesc]> logs;
     in-out property <bool> running: false;
+    in-out property <bool> stopping: false;
+    in-out property <string> status: "Idle";
+
+    in-out property <[LogOptionDesc]> log-options;
+    in-out property <int> base-level;
 
     callback start-emu();
+    callback stop-emu();
+    callback clear-logs();
+    callback base-level-picked(int);
+    callback target-level-picked(int /* row */, int /* level */);
 
     // Called from Rust after new rows are appended to `logs`.
     public function scroll-to-bottom() {
@@ -29,7 +38,11 @@ export component AppWindow inherits Window {
                 arm := ArmEmu {
                     logs: root.logs;
                     running: root.running;
+                    stopping: root.stopping;
+                    status: root.status;
                     start-emu => { root.start-emu(); }
+                    stop-emu => { root.stop-emu(); }
+                    clear-logs => { root.clear-logs(); }
                 }
             }
             Tab {
@@ -46,7 +59,12 @@ export component AppWindow inherits Window {
             }
             Tab {
                 title: "Options";
-                OptionsPane {}
+                OptionsPane {
+                    log-options: root.log-options;
+                    base-level: root.base-level;
+                    base-level-picked(lvl) => { root.base-level-picked(lvl); }
+                    target-level-picked(row, lvl) => { root.target-level-picked(row, lvl); }
+                }
             }
             Tab {
                 title: "About";
@@ -55,4 +73,3 @@ export component AppWindow inherits Window {
         }
     }
 }
-
