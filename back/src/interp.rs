@@ -369,7 +369,9 @@ impl InterpBackend {
         // Depending on the instruction, adjust the program counter
         let cpu_res = match disp_res {
             DispatchRes::Breakpoint => {
-                // self.debugger_attached = true;
+                if let Some(ref mut debugger) = self.debugger {
+                    debugger.state = DebugState::DoneStepPause;
+                }
                 self.cpu.increment_pc();
                 CpuRes::StepOk
             }
