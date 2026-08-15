@@ -49,7 +49,7 @@ impl MmioDevice for SerialInterface {
             0x34 => self.comcsr,
             0x38 => self.sr,
             0x3c => self.exilk,
-            0x80..0xfc => self.iobuf[(off - 0x80) / 4],
+            0x80..=0xfc => self.iobuf[(off - 0x80) / 4],
             _ => { bail!("SI read from undefined offset {off:x}"); },
         };
         Ok(BusPacket::Word(val))
@@ -63,7 +63,7 @@ impl MmioDevice for SerialInterface {
             0x34 => self.comcsr = val,
             0x38 => self.sr = val,
             0x3c => self.exilk = val,
-            0x80..0xfc => self.iobuf[(off - 0x80) / 4] = val,
+            0x80..=0xfc => self.iobuf[(off - 0x80) / 4] = val,
             _ => { bail!("SI write {val:08x} to undefined offset {off:x}"); },
         }
         Ok(None)
