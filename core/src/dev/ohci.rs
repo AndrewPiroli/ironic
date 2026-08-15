@@ -47,6 +47,7 @@ impl MmioDevice for OhcInterface {
             // NOTE: Everything is wired to 0 in skyeye; good enough for now
             0x04 |
             0x08 |
+            0x0c |
             0x48 |
             0x4c |
             0x50 => 0,
