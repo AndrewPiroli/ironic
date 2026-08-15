@@ -17,7 +17,7 @@ pub struct SerialInterface {
     pub comcsr: u32,
     pub sr: u32,
     pub exilk: u32,
-    pub iobuf: [u32; 0x80],
+    pub iobuf: [u32; 0x20],
 }
 impl Default for SerialInterface {
     fn default() -> Self {
@@ -34,7 +34,7 @@ impl SerialInterface {
             comcsr: 0,
             sr: 0,
             exilk: 0,
-            iobuf: [0; 0x80],
+            iobuf: [0; 0x20],
         }
     }
 }
