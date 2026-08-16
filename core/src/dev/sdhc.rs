@@ -1,7 +1,10 @@
 #![allow(clippy::needless_return, clippy::zero_prefixed_literal)]
-pub(crate) mod card;
+mod card;
+mod device;
+mod sdio;
 
-use anyhow::anyhow;
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use anyhow::bail;
 use log::{trace, debug, warn, error};
 
@@ -9,16 +12,44 @@ use crate::bus::prim::*;
 use crate::bus::mmio::*;
 use crate::bus::task::*;
 use crate::bus::Bus;
-use card::*;
+use super::hlwd::irq::HollywoodIrq;
+use card::Card;
+use device::{CmdRes, Response, SdDevice, TxDir};
+use sdio::WiFi4318;
+
+const BLOCK_LEN: usize = 512;
+const IO_POLL_INTERVAL: usize = 10000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SdhcSlot {
+    /// Front SD Slot
+    Sd0,
+    /// WiFi card slot
+    Sd1,
+}
+
+impl SdhcSlot {
+    fn irq(self) -> HollywoodIrq {
+        match self {
+            Self::Sd0 => HollywoodIrq::Sdhc,
+            Self::Sd1 => HollywoodIrq::Wifi,
+        }
+    }
+
+    pub(crate) const fn log_target(self) -> &'static str {
+        match self {
+            Self::Sd0 => "SDHC::sd0",
+            Self::Sd1 => "SDHC::sd1",
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum SDHCTask {
     RaiseInt,
-    SendBufReadReady,
-    SendBufWriteReady,
+    SendBufferReady(TxDir),
     IOPoll,
-    DoDMARead,
-    DoDMAWrite,
+    DoDma(TxDir),
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -184,29 +215,94 @@ impl SDRegisters {
             SDRegisters::SystemAddress
         )
     }
-    fn run_write_handler(&self, iface: &mut SDInterface, old: u32, new: u32) -> Option<SDHCTask> {
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransferState {
+    Idle,
+    Pending(TxDir),
+    Pio(TxDir),
+    Dma(TxDir),
+}
+
+#[repr(C, align(64))]
+pub struct SDInterface {
+    register_file: [u8; 256],
+    slot: SdhcSlot,
+    pending_interrupt_flags: u32,
+    insert_raised: bool,
+    first_ack: bool,
+    tx: TransferState,
+    block_bytes_left: AtomicU32,
+    device: SdDevice,
+}
+
+impl SDInterface {
+    pub fn new_sd0() -> Self {
+        Self::new(SdhcSlot::Sd0, SdDevice::Card(Card::new()))
+    }
+
+    pub fn new_sd1() -> Self {
+        Self::new(SdhcSlot::Sd1, SdDevice::Sdio(WiFi4318::new()))
+    }
+
+    fn new(slot: SdhcSlot, device: SdDevice) -> Self {
+        let mut new = Self {
+            register_file: [0; 256],
+            slot,
+            pending_interrupt_flags: 0,
+            insert_raised: false,
+            first_ack: false,
+            tx: TransferState::Idle,
+            block_bytes_left: AtomicU32::new(0),
+            device,
+        };
+        new.init_hwinit_regs();
+        debug!(target: slot.log_target(), "SD Interface Initialized");
+        new
+    }
+
+    fn init_hwinit_regs(&mut self) {
+        // Capabilities Register
+        const VOLTAGE_SUPPORT_3_3V: u32 = 1 << 24;
+        const SD_BASE_CLK_10MHZ: u32 = 10 << 8;
+        const DMA_SUPPORT: u32 = 1 << 22;
+        self.raw_write(SDRegisters::Capabilities.base_offset(), VOLTAGE_SUPPORT_3_3V | SD_BASE_CLK_10MHZ | DMA_SUPPORT);
+        // Maximum Current Capabilities Register
+        const CURRENT_CAP_3_3V_MAX: u32 = 0xff;
+        self.raw_write(SDRegisters::MaxCurrentCapabilities.base_offset(), CURRENT_CAP_3_3V_MAX);
+    }
+}
+
+impl SDInterface {
+    fn run_write_handler(&mut self, reg: SDRegisters, old: u32, new: u32) -> Option<SDHCTask> {
         let shift: usize;
         let mask: u32;
-        if self.bytecount_of_reg() >= 4 {
+        if reg.bytecount_of_reg() >= 4 {
             shift = 0;
             mask = 0xffff_ffff;
         }
         else {
             // Calculate shift to move the register in question to the right most position
-            shift = (self.base_offset() & 0x3) * 8;
-            mask = (1 << (self.bytecount_of_reg() * 8)) - 1;
+            shift = (reg.base_offset() & 0x3) * 8;
+            mask = (1 << (reg.bytecount_of_reg() * 8)) - 1;
         }
         let old = (old >> shift) & mask;
         let mut new = (new >> shift) & mask;
-        debug!(target: "SDHC", "write handler for {self:?} {old:x} {new:x}");
-        match self {
+        debug!(target: self.slot.log_target(), "write handler for {reg:?} {old:x} {new:x}");
+        match reg {
             SDRegisters::Command => {
-                let x = card::Command::from(new);
-                debug!(target: "SDHC", "Command {:?}", &x);
-                if let Some(response) = iface.card.issue(x, iface.raw_read(SDRegisters::Argument.base_offset())){
-                    self.apply_response(iface, response);
+                let cmd = device::Command::from(new);
+                debug!(target: self.slot.log_target(), "Command {cmd:?}");
+                let arg = self.raw_read(SDRegisters::Argument.base_offset());
+                let CmdRes { response, transfer } = self.device.command(cmd, arg);
+                if let Some(response) = response {
+                    self.apply_response(response);
                 }
-                if iface.cmd_complete() {
+                if let Some(dir) = transfer {
+                    self.tx = TransferState::Pending(dir);
+                }
+                if self.cmd_complete() {
                     return Some(SDHCTask::RaiseInt);
                 }
             }
@@ -214,60 +310,31 @@ impl SDRegisters {
                 const RW1C_MASK: u32 = 0x1ff; // mask of the bits that are rw1c, all others are reserved or ROC.
                 let clearbits = (old & RW1C_MASK) ^ (new & RW1C_MASK);
                 let int_new = (old & !RW1C_MASK) | clearbits;
-                debug!(target: "SDHC", "normalintstatus {old:b} {int_new:b}");
-                iface.setreg(*self, int_new);
+                debug!(target: self.slot.log_target(), "normalintstatus {old:b} {int_new:b}");
+                self.setreg(reg, int_new);
                 // The host driver will write here to acknowledge a CMD complete
                 // If there is a pending transfer that's supposed to be associated with that command
                 // This is the time to kick it off.
-                match iface.card.tx_status {
-                    CardTXStatus::MultiReadPending => { // Multi Block Read
-                        if new & 1 == 1 {
-                            let use_dma = iface.raw_read(SDRegisters::TxMode.base_offset()) & 0x1 == 1;
-                            if use_dma {
-                                iface.card.tx_status = CardTXStatus::DMAReadInProgress;
-                                return Some(SDHCTask::DoDMARead);
-                            }
-                            else {
-                                iface.card.tx_status = CardTXStatus::MultiReadInProgress;
-                                return Some(SDHCTask::SendBufReadReady);
-                            }
-                        }
-                    },
-                    CardTXStatus::MultiWritePending => {
-                        if new & 1 == 1 {
-                            let use_dma = iface.raw_read(SDRegisters::TxMode.base_offset()) & 0x1 == 1;
-                            if use_dma {
-                                iface.card.tx_status = CardTXStatus::DMAWriteInProgress;
-                                return Some(SDHCTask::DoDMAWrite);
-                            }
-                            else {
-                                iface.card.tx_status = CardTXStatus::MultiWriteInProgress;
-                                return Some(SDHCTask::SendBufWriteReady);
-                            }
-                        }
-                    },
-                    CardTXStatus::None | CardTXStatus::MultiReadInProgress | CardTXStatus::MultiWriteInProgress | CardTXStatus::DMAReadInProgress | CardTXStatus::DMAWriteInProgress => { // No action taken here
-                        return None;
-                    },
+                if new & 1 == 1 && let TransferState::Pending(dir) = self.tx {
+                    let use_dma = self.raw_read(SDRegisters::TxMode.base_offset()) & 0x1 == 1;
+                    if use_dma {
+                        self.tx = TransferState::Dma(dir);
+                        return Some(SDHCTask::DoDma(dir));
+                    }
+                    self.tx = TransferState::Pio(dir);
+                    return Some(SDHCTask::SendBufferReady(dir));
                 }
             },
             SDRegisters::ErrorIntStatus => {
                 const RW1C_MASK: u32 = 0xf1ff; // mask of the bits that are rw1c, all others are reserved or ROC.
                 let clearbits = (old & RW1C_MASK) ^ (new & RW1C_MASK);
                 let new = (old & !RW1C_MASK) | clearbits;
-                iface.setreg(*self, new);
+                self.setreg(reg, new);
             },
-            SDRegisters::NormalIntSignalEnable => {
-                debug!(target: "SDHC", "Normal Int Signal Enable {new:b}");
-                iface.setreg(*self, new);
-                if iface.do_pending_ints() || iface.insert_card() || iface.first_ack() {
-                    return Some(SDHCTask::RaiseInt);
-                }
-            },
-            SDRegisters::NormalIntStatusEnable => {
-                debug!(target: "SDHC", "Normal Int Status Enable {new:b}");
-                iface.setreg(*self, new);
-                if iface.do_pending_ints() || iface.insert_card() || iface.first_ack() {
+            SDRegisters::NormalIntSignalEnable | SDRegisters::NormalIntStatusEnable => {
+                debug!(target: self.slot.log_target(), "{reg:?} {new:b}");
+                self.setreg(reg, new);
+                if self.do_pending_ints() || self.insert_card() || self.first_ack() {
                     return Some(SDHCTask::RaiseInt);
                 }
             },
@@ -282,54 +349,39 @@ impl SDRegisters {
                     }
                     _=> {}
                 }
-                iface.setreg(*self, new);
+                self.setreg(reg, new);
             },
             SDRegisters::SoftwareReset => {
                 if new & 0b001 != 0 {
-                    iface.reset_all();
+                    self.reset_all();
                 }
                 else {
                     if new & 0b010 != 0 {
-                        iface.reset_cmd_line();
+                        self.reset_cmd_line();
                     }
                     if new & 0b100 != 0 {
-                        iface.reset_dat_line();
+                        self.reset_dat_line();
                     }
                 }
             },
             SDRegisters::BufferDataPort => {
-                match iface.card.tx_status {
-                    CardTXStatus::None |
-                    CardTXStatus::MultiReadPending |
-                    CardTXStatus::MultiReadInProgress |
-                    CardTXStatus::DMAReadInProgress |
-                    CardTXStatus::DMAWriteInProgress |
-                    CardTXStatus::MultiWritePending => {
-                        error!(target: "SDHC", "Software wrote to the BufferDataPort but there is no non-DMA write transaction.");
-                        // intentionally drop the write here
-                    }
-                    CardTXStatus::MultiWriteInProgress => {
-                        let index = iface.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
-                        {
-                            let mut v = iface.card.backing_mem.lock();
-                            if v.data.len() < index+4 || index+4 > iface.card.rw_stop {
-                                return None;
-                            }
-                            iface.card.rw_index.store(index+4, std::sync::atomic::Ordering::Relaxed);
-                            v.write(index, new).unwrap();
-                        }
-                    },
+                if self.tx != TransferState::Pio(TxDir::Write) {
+                    error!(target: self.slot.log_target(), "Software wrote to the BufferDataPort but there is no non-DMA write transaction.");
+                    // intentionally drop the write here
+                }
+                else if self.take_pio_word().is_none() {
+                    // The driver overran the block; drop the write.
+                    error!(target: self.slot.log_target(), "Software wrote past the end of the current block.");
+                }
+                else if let Err(e) = self.device.write_data(&new.to_be_bytes()) {
+                    error!(target: self.slot.log_target(), "BufferDataPort write failed: {e:#}");
                 }
             },
             SDRegisters::SystemAddress => {
-                iface.setreg(*self, new);
-                if old & 0xff00_0000 != new & 0xff00_0000 {
-                    if iface.card.tx_status == CardTXStatus::DMAReadInProgress {
-                        return Some(SDHCTask::DoDMARead);
-                    }
-                    else if iface.card.tx_status == CardTXStatus::DMAWriteInProgress {
-                        return Some(SDHCTask::DoDMAWrite);
-                    }
+                self.setreg(reg, new);
+                if old & 0xff00_0000 != new & 0xff00_0000
+                    && let TransferState::Dma(dir) = self.tx {
+                    return Some(SDHCTask::DoDma(dir));
                 }
             }
             SDRegisters::HostControl |
@@ -342,38 +394,28 @@ impl SDRegisters {
             SDRegisters::TimeoutControl |
             SDRegisters::PowerControl => {
                 // No special handling needed for these registers
-                iface.setreg(*self, new);
+                self.setreg(reg, new);
             },
             other => {
-                warn!(target: "SDHC", "Unhandled write to register: {other:?}");
-                iface.setreg(*other, new);
+                warn!(target: self.slot.log_target(), "Unhandled write to register: {other:?}");
+                self.setreg(other, new);
             }
         }
         None
     }
-    fn apply_response(&self, iface: &mut SDInterface, response: Response) {
+    fn apply_response(&mut self, response: Response) {
         match response {
             Response::Regular(r) => {
-                iface.raw_write(SDRegisters::Response.base_offset(), r);
+                self.raw_write(SDRegisters::Response.base_offset(), r);
             },
             Response::R2(r) => {
-                iface.raw_write(SDRegisters::Response.base_offset(),      ((r >> 00) & 0xffff_ffff) as u32);
-                iface.raw_write(SDRegisters::Response.base_offset() + 04, ((r >> 32) & 0xffff_ffff) as u32);
-                iface.raw_write(SDRegisters::Response.base_offset() + 08, ((r >> 64) & 0xffff_ffff) as u32);
-                iface.raw_write(SDRegisters::Response.base_offset() + 12, ((r >> 96) & 0xffff_ffff) as u32);
+                self.raw_write(SDRegisters::Response.base_offset(),      ((r >> 00) & 0xffff_ffff) as u32);
+                self.raw_write(SDRegisters::Response.base_offset() + 04, ((r >> 32) & 0xffff_ffff) as u32);
+                self.raw_write(SDRegisters::Response.base_offset() + 08, ((r >> 64) & 0xffff_ffff) as u32);
+                self.raw_write(SDRegisters::Response.base_offset() + 12, ((r >> 96) & 0xffff_ffff) as u32);
             }
         }
     }
-}
-
-#[repr(C, align(64))]
-pub struct SDInterface {
-    register_file: [u8; 256],
-    pending_interrupt_flags: u32,
-    insert_raised: bool,
-    first_ack: bool,
-    card: Card,
-    tx_status: CardTXStatus,
 }
 
 impl SDInterface {
@@ -383,7 +425,7 @@ impl SDInterface {
         let off = off >> 2;
         assert!(off < 64); //length
         let ret = unsafe { *(p.add(off)) };
-        trace!(target: "SDHC", "raw_read 0x{:x} = 0x{ret:x}", off << 2);
+        trace!(target: self.slot.log_target(), "raw_read 0x{:x} = 0x{ret:x}", off << 2);
         ret
     }
     fn raw_write(&mut self, off: usize, val: u32) {
@@ -392,7 +434,7 @@ impl SDInterface {
         let off = off >> 2;
         assert!(off < 64); //length
         unsafe { *(p.add(off)) = val; };
-        trace!(target: "SDHC", "raw_write 0x{:x} = 0x{val:x}", off << 2);
+        trace!(target: self.slot.log_target(), "raw_write 0x{:x} = 0x{val:x}", off << 2);
     }
     fn setreg(&mut self, reg: SDRegisters, val: u32) {
         match reg.bytecount_of_reg() {
@@ -450,15 +492,25 @@ impl SDInterface {
         }
     }
     fn reset_all(&mut self) {
-        debug!(target: "SDHC", "SD interface software reset for ALL");
-        let mut new = Self::default();
+        debug!(target: self.slot.log_target(), "SD interface software reset for ALL");
         let card_detection_circuit_status = self.raw_read(SDRegisters::PresentState.base_offset()) & 0x70000;
-        new.raw_write(SDRegisters::PresentState.base_offset(), card_detection_circuit_status);
-        new.insert_raised = self.insert_raised;
-        *self = new;
+        self.register_file = [0; 256];
+        self.pending_interrupt_flags = 0;
+        self.first_ack = false;
+        self.block_bytes_left.store(0, Ordering::Relaxed);
+        self.init_hwinit_regs();
+        self.raw_write(SDRegisters::PresentState.base_offset(), card_detection_circuit_status);
+        self.abort_transfer();
+    }
+    fn abort_transfer(&mut self) {
+        if self.tx != TransferState::Idle {
+            self.tx = TransferState::Idle;
+            self.block_bytes_left.store(0, Ordering::Relaxed);
+            self.device.end_transfer(true);
+        }
     }
     fn reset_cmd_line(&mut self) {
-        debug!(target: "SDHC", "SD interface software reset for CMD line");
+        debug!(target: self.slot.log_target(), "SD interface software reset for CMD line");
         // Clear the following bits in Present State Register
         // - Command Inhibit (CMD) bit 0
         let ps = self.raw_read(SDRegisters::PresentState.base_offset());
@@ -473,7 +525,7 @@ impl SDInterface {
         self.pending_interrupt_flags &= !NISR_CMD_RESET;
     }
     fn reset_dat_line(&mut self) {
-        debug!(target: "SDHC", "SD interface software reset for DAT line");
+        debug!(target: self.slot.log_target(), "SD interface software reset for DAT line");
         // Clear & init Buffer Data Port
         self.setreg(SDRegisters::BufferDataPort, 0);
         // Clear the following bits in Present State Register
@@ -506,10 +558,10 @@ impl SDInterface {
         // Spec tells us to "Reset DMA circuit" as well.
         // Not really sure what that means *exactly*, but we will clear any transactions in progress with the card
         // This may cause errors to be logged to the console, but shouldn't be a big deal otherwise.
-        self.card.tx_status = CardTXStatus::None;
+        self.abort_transfer();
     }
     fn insert_card(&mut self) -> bool {
-        if self.insert_raised || !self.card.available {
+        if self.insert_raised || !self.device.present() {
             return false;
         }
         let current_state = self.raw_read(SDRegisters::PresentState.base_offset());
@@ -519,147 +571,85 @@ impl SDInterface {
         return self.raise_int(INSERT_INT_MASK);
     }
     fn first_ack(&mut self) -> bool {
-        if self.first_ack {
+        if self.first_ack || !self.device.present() {
             return false;
         }
         self.first_ack = true;
-        debug!(target: "SDHC", "Sending inital ack for card setup");
+        debug!(target: self.slot.log_target(), "Sending inital ack for card setup");
         const CMD_COMPLETE_MASK: u32 = 1;
         return self.raise_int(CMD_COMPLETE_MASK);
     }
     fn cmd_complete(&mut self) -> bool {
-        debug!(target: "SDHC", "CMD complete int");
+        debug!(target: self.slot.log_target(), "CMD complete int");
         const CMD_COMPLETE_MASK: u32 = 1;
         return self.raise_int(CMD_COMPLETE_MASK);
     }
-    fn buffer_ready_read(&mut self) -> bool {
-        let blocks_remaining = self.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
-        if blocks_remaining > 0 {
-            self.card.rw_stop = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) + 512;
-            self.setreg(SDRegisters::BlockCount, blocks_remaining.saturating_sub(1));
-        }
-        else {
-            return false;
-        }
-        trace!(target: "SDHC", "Buffer Ready Read");
-        // Present State Buffer Read Enable (11) & Read Tx Active (9) & Command Inhibit (DAT) (1)
-        let ps = self.raw_read(SDRegisters::PresentState.base_offset());
-        self.setreg(SDRegisters::PresentState, ps | 1<<11 | 1<<9| 1 << 1);
-        // Set Buffer Read Ready Int
-        const BUFFER_READ_READY_MASK: u32 = 1 << 5;
-        return self.raise_int(BUFFER_READ_READY_MASK);
+    fn blocks_remaining(&self) -> u32 {
+        self.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16
     }
-    fn buffer_ready_write(&mut self) -> bool {
-        let blocks_remaining = self.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
-        if blocks_remaining > 0 {
-            // tell card it's rw_stop
-            self.card.rw_stop = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed) + 512;
-            self.setreg(SDRegisters::BlockCount, blocks_remaining.saturating_sub(1));
-        }
-        else {
+    fn take_pio_word(&self) -> Option<()> {
+        let left = self.block_bytes_left.load(Ordering::Relaxed);
+        let remaining = left.checked_sub(4)?;
+        self.block_bytes_left.store(remaining, Ordering::Relaxed);
+        Some(())
+    }
+    fn buffer_ready(&mut self, dir: TxDir) -> bool {
+        let blocks_remaining = self.blocks_remaining();
+        if blocks_remaining == 0 {
             return false;
         }
-        trace!(target: "SDHC", "Buffer Ready Write");
-        // Present State Buffer Write Enable (11) & Write Tx Active (9) & Command Inhibit (DAT) (1)
+        self.block_bytes_left.store(BLOCK_LEN as u32, Ordering::Relaxed);
+        self.setreg(SDRegisters::BlockCount, blocks_remaining - 1);
+        trace!(target: self.slot.log_target(), "Buffer Ready {dir:?}");
+        // Present State: Buffer Enable & Transfer Active for this direction, plus
+        // Command Inhibit (DAT) (1)
         let ps = self.raw_read(SDRegisters::PresentState.base_offset());
-        self.setreg(SDRegisters::PresentState, ps | 1<<10 | 1<<8 | 1 << 1);
-        // Set Buffer Write Ready Int
-        const BUFFER_WRITE_READY_MASK: u32 = 1 << 4;
-        return self.raise_int(BUFFER_WRITE_READY_MASK);
+        self.setreg(SDRegisters::PresentState, ps | Self::ps_transfer_bits(dir, false) | 1 << 1);
+        // Set Buffer Read/Write Ready Int
+        let int = match dir {
+            TxDir::Read => 1 << 5,
+            TxDir::Write => 1 << 4,
+        };
+        return self.raise_int(int);
+    }
+    fn ps_transfer_bits(dir: TxDir, is_dma: bool) -> u32 {
+        let (buffer_enable, transfer_active) = match dir {
+            //         Buffer Read Enable, Read Transfer Active
+            TxDir::Read => (1 << 11, 1 << 9),
+            //         Buffer Write Enable, Write Transfer Active
+            TxDir::Write => (1 << 10, 1 << 8),
+        };
+        if is_dma { transfer_active } else { buffer_enable | transfer_active }
     }
     fn tx_complete(&mut self) -> bool {
-        debug!(target: "SDHC", "Tx Complete");
-        match self.card.tx_status {
-            CardTXStatus::None |
-            CardTXStatus::MultiReadPending |
-            CardTXStatus::MultiWritePending => {
-                error!(target: "SDHC", "Requested Tx complete but no transfer is active.");
+        debug!(target: self.slot.log_target(), "Tx Complete");
+        let (dir, is_dma) = match self.tx {
+            TransferState::Idle | TransferState::Pending(_) => {
+                error!(target: self.slot.log_target(), "Requested Tx complete but no transfer is active.");
                 return false;
             },
-            CardTXStatus::MultiWriteInProgress => {
-                // Clear Block Count Register
-                self.setreg(SDRegisters::BlockCount, 0);
-                // clear PS Buffer write enable & Write Tx Active & CMD Inhibit (DAT)
-                let ps = self.raw_read(SDRegisters::PresentState.base_offset());
-                const KILL_MASK: u32 = !(1 << 10 | 1 << 8 | 1 << 1);
-                self.setreg(SDRegisters::PresentState, ps & KILL_MASK);
-                self.card.tx_status = CardTXStatus::None;
-                self.card.state = CardState::Trans;
-                const TRANSFER_COMPLETE_MASK: u32 = 1 << 1;
-                return self.raise_int(TRANSFER_COMPLETE_MASK);
-            },
-            CardTXStatus::MultiReadInProgress => {
-                // Clear Block Count Register
-                self.setreg(SDRegisters::BlockCount, 0);
-                // clear PS Buffer read enable & Read Tx Active & CMD Inhibit (DAT)
-                let ps = self.raw_read(SDRegisters::PresentState.base_offset());
-                const KILL_MASK: u32 = !(1 << 11 | 1 << 9 | 1 << 1);
-                self.setreg(SDRegisters::PresentState, ps & KILL_MASK);
-                const TRANSFER_COMPLETE_MASK: u32 = 1 << 1;
-                self.card.tx_status = CardTXStatus::None;
-                self.card.state = CardState::Trans;
-                return self.raise_int(TRANSFER_COMPLETE_MASK);
-            },
-            CardTXStatus::DMAReadInProgress => {
-                // Clear Block Count Register
-                self.setreg(SDRegisters::BlockCount, 0);
-                // clear PS Read Tx Active & CMD Inhibit (DAT)
-                let ps = self.raw_read(SDRegisters::PresentState.base_offset());
-                const KILL_MASK: u32 = !(1 << 9 | 1 << 1);
-                self.setreg(SDRegisters::PresentState, ps & KILL_MASK);
-                self.card.tx_status = CardTXStatus::None;
-                self.card.state = CardState::Trans;
-                const TRANSFER_COMPLETE_MASK: u32 = 1 << 1;
-                return self.raise_int(TRANSFER_COMPLETE_MASK);
-            },
-            CardTXStatus::DMAWriteInProgress => {
-                // Clear Block Count Register
-                self.setreg(SDRegisters::BlockCount, 0);
-                // clear PS Buffer  Write Tx Active & CMD Inhibit (DAT)
-                let ps = self.raw_read(SDRegisters::PresentState.base_offset());
-                const KILL_MASK: u32 = !(1 << 8 | 1 << 1);
-                self.setreg(SDRegisters::PresentState, ps & KILL_MASK);
-                self.card.tx_status = CardTXStatus::None;
-                self.card.state = CardState::Trans;
-                const TRANSFER_COMPLETE_MASK: u32 = 1 << 1;
-                return self.raise_int(TRANSFER_COMPLETE_MASK);
-            }
-        }
+            TransferState::Pio(dir) => (dir, false),
+            TransferState::Dma(dir) => (dir, true),
+        };
+        // Clear Block Count Register
+        self.setreg(SDRegisters::BlockCount, 0);
+        // Clear this transfer's Present State bits & CMD Inhibit (DAT)
+        let kill_mask = Self::ps_transfer_bits(dir, is_dma) | 1 << 1;
+        let ps = self.raw_read(SDRegisters::PresentState.base_offset());
+        self.setreg(SDRegisters::PresentState, ps & !kill_mask);
+        self.tx = TransferState::Idle;
+        self.block_bytes_left.store(0, Ordering::Relaxed);
+        self.device.end_transfer(false);
+        const TRANSFER_COMPLETE_MASK: u32 = 1 << 1;
+        return self.raise_int(TRANSFER_COMPLETE_MASK);
     }
     fn dma_int(&mut self) -> bool {
         const DMA_INT: u32 = 1 << 3;
-        match self.tx_status {
-            CardTXStatus::None |
-            CardTXStatus::MultiReadPending |
-            CardTXStatus::MultiReadInProgress |
-            CardTXStatus::MultiWritePending |
-            CardTXStatus::MultiWriteInProgress => {
-                error!(target: "SDHC", "Asked for a DMA Interrupt but no DMA transfer is in progress");
-                return false;
-            },
-            CardTXStatus::DMAReadInProgress | CardTXStatus::DMAWriteInProgress  => {
-                return self.raise_int(DMA_INT);
-            },
+        if !matches!(self.tx, TransferState::Dma(_)) {
+            error!(target: self.slot.log_target(), "Asked for a DMA Interrupt but no DMA transfer is in progress");
+            return false;
         }
-    }
-}
-
-impl Default for SDInterface {
-    fn default() -> Self {
-        let card = Card::new();
-        let mut new = Self { register_file: [0;256], pending_interrupt_flags: 0, insert_raised: false, first_ack: false, card, tx_status: CardTXStatus::None };
-        // Fill HWInit registers
-        // Capabilities Register
-        const VOLTAGE_SUPPORT_3_3V: u32 = 1 << 24;
-        const SD_BASE_CLK_10MHZ: u32 = 10 << 8;
-        const DMA_SUPPORT: u32 = 1 << 22;
-        new.raw_write(SDRegisters::Capabilities.base_offset(), VOLTAGE_SUPPORT_3_3V | SD_BASE_CLK_10MHZ | DMA_SUPPORT);
-        // Maximum Current Capabilities Register
-        const CURRENT_CAP_3_3V_MAX: u32 = 0xff;
-        new.raw_write(SDRegisters::MaxCurrentCapabilities.base_offset(), CURRENT_CAP_3_3V_MAX);
-        // End HWInit Registers
-        debug!(target: "SDHC", "SD Interface Initialized");
-        new
+        return self.raise_int(DMA_INT);
     }
 }
 
@@ -667,45 +657,26 @@ impl MmioDevice for SDInterface {
     type Width = u32;
 
     fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
-        trace!(target: "SDHC", "MMIO read: 0x{off:x}");
+        trace!(target: self.slot.log_target(), "MMIO read: 0x{off:x}");
         if off == SDRegisters::BufferDataPort.base_offset() {
-            match self.card.tx_status {
-                CardTXStatus::None |
-                CardTXStatus::MultiReadPending |
-                CardTXStatus::MultiWritePending |
-                CardTXStatus::MultiWriteInProgress |
-                CardTXStatus::DMAReadInProgress |
-                CardTXStatus::DMAWriteInProgress => { error!(target: "SDHC", "Software tried reading the BufferDataPort but there is no non-DMA read transaction."); }
-                CardTXStatus::MultiReadInProgress => {
-                    let index = self.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
-                    {
-                        let v = self.card.backing_mem.lock();
-                        if v.data.len() < index+4 || index+4 > self.card.rw_stop {
-                            return Err(anyhow!("SDHC read out of range! {index:?} data len: {:?} rw_stop: {} ", v.data.len(), self.card.rw_stop));
-                        }
-                        self.card.rw_index.store(index+4, std::sync::atomic::Ordering::Relaxed);
-                        let ret: u32 = v.read(index).unwrap();
-                        return Ok(BusPacket::Word(ret));
-                    }
-                },
-            }
+            return self.read_buffer_data_port();
         }
         Ok(BusPacket::Word(self.raw_read(off)))
     }
 
     fn write(&mut self, off: usize, val: Self::Width) -> anyhow::Result<Option<BusTask>> {
-        debug!(target: "SDHC", "MMIO write: 0x{off:x} = 0x{val:x}");
+        debug!(target: self.slot.log_target(), "MMIO write: 0x{off:x} = 0x{val:x}");
         let old = self.raw_read(off);
         let regs = SDRegisters::get_affected_registers(off, old, val);
-        debug!(target: "SDHC", "affected registers: {:?}", &regs);
+        debug!(target: self.slot.log_target(), "affected registers: {:?}", &regs);
         let mut send_task = None;
         for reg in regs {
-            if let Some(task) = reg.run_write_handler(self, old, val) {
+            if let Some(task) = self.run_write_handler(reg, old, val) {
                 if send_task.is_none() {
-                    send_task = Some(BusTask::SDHC(task));
+                    send_task = Some(BusTask::SDHC(self.slot, task));
                 }
                 else {
-                    error!(target: "SDHC", "Multiple SDHC Tasks returned from a single write. This is not supported.");
+                    error!(target: self.slot.log_target(), "Multiple SDHC Tasks returned from a single write. This is not supported.");
                 }
             }
         }
@@ -713,189 +684,115 @@ impl MmioDevice for SDInterface {
     }
 }
 
-#[derive(Default)]
-pub struct WLANInterface {
-    pub unk_24: u32,
-    pub unk_40: u32,
-    pub unk_fc: u32,
-}
-
-impl MmioDevice for WLANInterface {
-    type Width = u32;
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
-        let val = match off {
-            0x24 => self.unk_24,
-            //0x24 => 0x0001_0000, //self.unk_24,
-            //0x40 => 0x0040_0000, //self.unk_24,
-            //0xfc => self.unk_fc,
-            _ => { bail!("SDHC1 read at {off:x} unimpl"); },
-        };
-        Ok(BusPacket::Word(val))
-    }
-    fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
-        bail!("SDHC1 write {val:08x} at {off:x} unimpl")
+impl SDInterface {
+    fn read_buffer_data_port(&self) -> anyhow::Result<BusPacket> {
+        if self.tx != TransferState::Pio(TxDir::Read) {
+            error!(target: self.slot.log_target(), "Software tried reading the BufferDataPort but there is no non-DMA read transaction.");
+            return Ok(BusPacket::Word(self.raw_read(SDRegisters::BufferDataPort.base_offset())));
+        }
+        if self.take_pio_word().is_none() {
+            bail!("SDHC read past the end of the current block");
+        }
+        let mut buf = [0u8; 4];
+        self.device.read_data(&mut buf)?;
+        Ok(BusPacket::Word(u32::from_be_bytes(buf)))
     }
 }
-
 
 impl Bus {
-    pub(crate) fn handle_task_sdhc(&mut self, task: SDHCTask) {
-        use super::hlwd::irq::HollywoodIrq;
+    fn sdhc(&mut self, slot: SdhcSlot) -> &mut SDInterface {
+        match slot {
+            SdhcSlot::Sd0 => &mut self.sd0,
+            SdhcSlot::Sd1 => &mut self.sd1,
+        }
+    }
+    fn sdhc_schedule(&mut self, slot: SdhcSlot, task: SDHCTask) {
+        self.tasks.push(Task {
+            kind: BusTask::SDHC(slot, task),
+            target_cycle: self.cycle + IO_POLL_INTERVAL,
+        });
+    }
+    pub(crate) fn handle_task_sdhc(&mut self, slot: SdhcSlot, task: SDHCTask) {
+        let irq = slot.irq();
+        let log = slot.log_target();
         match task {
             SDHCTask::RaiseInt => {
-                debug!(target: "SDHC", "Raising SDHC interrupt.");
-                self.hlwd.irq.assert(HollywoodIrq::Sdhc);
+                debug!(target: log, "Raising SDHC interrupt.");
+                self.hlwd.irq.assert(irq);
             },
-            SDHCTask::SendBufReadReady => {
-                match self.sd0.buffer_ready_read() {
-                    true => {
-                        self.tasks.push(
-                            Task { kind: BusTask::SDHC(SDHCTask::IOPoll), target_cycle: self.cycle+10000 }
-                        );
-                        self.hlwd.irq.assert(HollywoodIrq::Sdhc);
-                    },
-                    false => {
-                        unimplemented!();
-                    },
+            SDHCTask::SendBufferReady(dir) => {
+                if !self.sdhc(slot).buffer_ready(dir) {
+                    unimplemented!("SDHC could not open the next {dir:?} block");
                 }
+                self.sdhc_schedule(slot, SDHCTask::IOPoll);
+                self.hlwd.irq.assert(irq);
             },
-            SDHCTask::SendBufWriteReady => {
-                match self.sd0.buffer_ready_write() {
-                    true => {
-                        self.tasks.push(
-                            Task { kind: BusTask::SDHC(SDHCTask::IOPoll), target_cycle: self.cycle+10000 }
-                        );
-                        self.hlwd.irq.assert(HollywoodIrq::Sdhc);
-                    },
-                    false => {
-                        unimplemented!();
-                    },
-                }
-            },
-            SDHCTask::DoDMARead => {
-                let sysaddr = self.sd0.raw_read(SDRegisters::SystemAddress.base_offset());
-                let buff_boundry = 0x1000u32 << ((self.sd0.raw_read(SDRegisters::BlockSize.base_offset()) & 0x7000) >> 12);
+            SDHCTask::DoDma(dir) => { // carefulling in progress
+                let sysaddr = self.sdhc(slot).raw_read(SDRegisters::SystemAddress.base_offset());
+                let buff_boundry = 0x1000u32 << ((self.sdhc(slot).raw_read(SDRegisters::BlockSize.base_offset()) & 0x7000) >> 12);
                 let stop_addr = match sysaddr.checked_add(buff_boundry) { // mini always sets 512k boundry size, even if that would overrun the address space
                     Some(x) => (x + 1) & !(buff_boundry - 1),
                     None => u32::MAX,
                 };
-                let mut block_count = self.sd0.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
+                let mut block_count = self.sdhc(slot).blocks_remaining();
                 let mut current_addr = sysaddr;
-                debug!(target: "SDHC", "Starting DMA Read Tx to sysaddr: {sysaddr:x}");
-                let mut local_buf = vec![0;512];
-                while current_addr+512 < stop_addr && block_count > 0 {
-                    let offset = self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
-                    self.sd0.card.backing_mem.lock().read_buf(offset, &mut local_buf).unwrap();
-                    self.dma_write(current_addr, &local_buf).unwrap();
-                    self.sd0.card.rw_index.store(offset + 512, std::sync::atomic::Ordering::Relaxed);
-                    local_buf.fill(0);
+                debug!(target: log, "Starting DMA {dir:?} Tx at sysaddr: {sysaddr:x}");
+                let block_len = BLOCK_LEN as u32;
+                let mut buf = vec![0u8; BLOCK_LEN];
+                while current_addr + block_len < stop_addr && block_count > 0 {
+                    match dir {
+                        TxDir::Read => {
+                            self.sdhc(slot).device.read_data(&mut buf).unwrap();
+                            self.dma_write(current_addr, &buf).unwrap();
+                        },
+                        TxDir::Write => {
+                            self.dma_read(current_addr, &mut buf).unwrap();
+                            self.sdhc(slot).device.write_data(&buf).unwrap();
+                        },
+                    }
                     block_count -= 1;
-                    current_addr += 512;
+                    current_addr += block_len;
                 }
                 let send_dma_int = current_addr >= stop_addr;
                 let send_tx_complete = block_count == 0;
-                debug!(target: "SDHC", "DMA Transfer completed after {} blocks. Reached DMA Boundry: {send_dma_int}. Reached Block Count: {send_tx_complete}", (current_addr-sysaddr) / 512);
-                self.sd0.setreg(SDRegisters::BlockCount, block_count);
-                self.sd0.setreg(SDRegisters::SystemAddress, current_addr);
+                debug!(target: log, "DMA Transfer completed after {} blocks. Reached DMA Boundry: {send_dma_int}. Reached Block Count: {send_tx_complete}", (current_addr-sysaddr) / block_len);
+                self.sdhc(slot).setreg(SDRegisters::BlockCount, block_count);
+                self.sdhc(slot).setreg(SDRegisters::SystemAddress, current_addr);
                 if send_tx_complete { // TX Complete has higher priority than DMA complete. Never send both!
-                    if self.sd0.tx_complete() {
-                        self.hlwd.irq.assert(HollywoodIrq::Sdhc);
+                    if self.sdhc(slot).tx_complete() {
+                        self.hlwd.irq.assert(irq);
                     }
                 }
                 else if send_dma_int {
-                    if self.sd0.dma_int() {
-                        self.hlwd.irq.assert(HollywoodIrq::Sdhc);
+                    // Paused at a DMA buffer boundary; the driver resumes us by
+                    // writing the next System Address.
+                    if self.sdhc(slot).dma_int() {
+                        self.hlwd.irq.assert(irq);
                     }
                 }
                 else {
                     unreachable!("SDHC DMA Logic Error");
                 }
             },
-            SDHCTask::DoDMAWrite => {
-                let sysaddr: u32 = self.sd0.raw_read(SDRegisters::SystemAddress.base_offset());
-                let buff_boundry = 0x1000u32 << ((self.sd0.raw_read(SDRegisters::BlockSize.base_offset()) & 0x7000) >> 12);
-                let stop_addr = match sysaddr.checked_add(buff_boundry) { // mini always sets 512k boundry size, even if that would overrun the address space
-                    Some(x) => (x + 1) & !(buff_boundry - 1),
-                    None => u32::MAX,
-                };
-                let mut block_count = self.sd0.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
-                let mut current_addr = sysaddr;
-                debug!(target: "SDHC", "Starting DMA Write Tx from sysaddr: {sysaddr:x}");
-                let mut local_buf = vec![0;512];
-                while current_addr+512 < stop_addr && block_count > 0 {
-                    self.dma_read(current_addr, &mut local_buf).unwrap();
-                    let offset = self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
-                    self.sd0.card.backing_mem.lock().write_buf(offset, &local_buf).unwrap();
-                    self.sd0.card.rw_index.store(offset + 512, std::sync::atomic::Ordering::Relaxed);
-                    local_buf.fill(0);
-                    block_count -= 1;
-                    current_addr += 512;
-                }
-                let send_dma_int = current_addr >= stop_addr;
-                let send_tx_complete = block_count == 0;
-                debug!(target: "SDHC", "DMA Transfer completed after {} blocks. Reached DMA Boundry: {send_dma_int}. Reached Block Count: {send_tx_complete}", (current_addr-sysaddr) / 512);
-                self.sd0.setreg(SDRegisters::BlockCount, block_count);
-                self.sd0.setreg(SDRegisters::SystemAddress, current_addr);
-                if send_tx_complete { // TX Complete has higher priority than DMA complete. Never send both!
-                    if self.sd0.tx_complete() {
-                        self.hlwd.irq.assert(HollywoodIrq::Sdhc);
-                    }
-                }
-                else if send_dma_int {
-                    if self.sd0.dma_int() {
-                        self.hlwd.irq.assert(HollywoodIrq::Sdhc);
-                    }
-                }
-                else {
-                    unreachable!("SDHC DMA Logic Error");
-                }
-            }
             SDHCTask::IOPoll => {
-                let rw_index = self.sd0.card.rw_index.load(std::sync::atomic::Ordering::Relaxed);
-                trace!(target: "SDHC", "SDHC IOPOLL {} {}", rw_index, self.sd0.card.rw_stop);
-                match self.sd0.card.tx_status {
-                    CardTXStatus::None |
-                    CardTXStatus::MultiReadPending |
-                    CardTXStatus::MultiWritePending => {},
-                    CardTXStatus::DMAReadInProgress | CardTXStatus::DMAWriteInProgress => {
-                        error!(target: "SDHC", "Improper state for SDHC IOPOLLing.");
-                    }
-                    CardTXStatus::MultiReadInProgress => {
-                        if rw_index >= self.sd0.card.rw_stop {
-                            let blocks_remain = self.sd0.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
-                            if blocks_remain > 0 {
-                                self.tasks.push(
-                                    Task { kind: BusTask::SDHC(SDHCTask::SendBufReadReady), target_cycle: self.cycle + 10000 }
-                                );
-                            }
-                            else if self.sd0.tx_complete() {
-                               self.hlwd.irq.assert(HollywoodIrq::Sdhc);
-                            }
-                        }
-                        else {
-                            self.tasks.push(
-                                Task { kind: BusTask::SDHC(SDHCTask::IOPoll), target_cycle: self.cycle+10000 }
-                            );
-                        }
+                let left = self.sdhc(slot).block_bytes_left.load(Ordering::Relaxed);
+                trace!(target: log, "SDHC IOPOLL: {left} bytes left in block");
+                let dir = match self.sdhc(slot).tx {
+                    TransferState::Idle | TransferState::Pending(_) => return,
+                    TransferState::Dma(_) => {
+                        error!(target: log, "Improper state for SDHC IOPOLLing.");
+                        return;
                     },
-                    CardTXStatus::MultiWriteInProgress => {
-                        if rw_index >= self.sd0.card.rw_stop {
-                            let blocks_remain = self.sd0.raw_read(SDRegisters::BlockCount.base_offset() & 0xffff_fffc) >> 16;
-                            if blocks_remain > 0 {
-                                self.tasks.push(
-                                    Task { kind: BusTask::SDHC(SDHCTask::SendBufWriteReady), target_cycle: self.cycle + 10000 }
-                                );
-                            }
-                            else if self.sd0.tx_complete() {
-                                self.hlwd.irq.assert(HollywoodIrq::Sdhc);
-                            }
-                        }
-                        else {
-                            self.tasks.push(
-                                Task { kind: BusTask::SDHC(SDHCTask::IOPoll), target_cycle: self.cycle+10000 }
-                            );
-                        }
-                    }
+                    TransferState::Pio(dir) => dir,
+                };
+                if left > 0 {
+                    self.sdhc_schedule(slot, SDHCTask::IOPoll);
+                }
+                else if self.sdhc(slot).blocks_remaining() > 0 {
+                    self.sdhc_schedule(slot, SDHCTask::SendBufferReady(dir));
+                }
+                else if self.sdhc(slot).tx_complete() {
+                    self.hlwd.irq.assert(irq);
                 }
             },
         }

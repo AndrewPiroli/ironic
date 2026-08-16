@@ -1,4 +1,4 @@
-use super::SDHCTask;
+use super::{SDHCTask, SdhcSlot};
 
 
 /// Some type of indirect access (from memory interface to the DDR interface).
@@ -23,8 +23,8 @@ pub enum BusTask {
     /// A read/write access request on the DDR interface.
     Mi { kind: IndirAccess, data: u16 },
 
-    // SD Host Controller
-    SDHC(SDHCTask),
+    /// Work for one of the two SD host controllers.
+    SDHC(SdhcSlot, SDHCTask),
 }
 
 /// An entry kept by the [Bus], representing some task to-be-completed.

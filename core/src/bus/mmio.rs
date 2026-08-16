@@ -134,7 +134,7 @@ impl Bus {
                     BusTask::Mi{kind, data} => self.handle_task_mi(kind, data)?,
                     BusTask::SetRomDisabled(x) => self.rom_disabled = x,
                     BusTask::SetMirrorEnabled(x) => self.mirror_enabled = x,
-                    BusTask::SDHC(task) => self.handle_task_sdhc(task),
+                    BusTask::SDHC(slot, task) => self.handle_task_sdhc(slot, task),
                 }
             } else {
                 idx += 1;

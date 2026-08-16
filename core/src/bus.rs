@@ -50,7 +50,7 @@ pub struct Bus {
     pub ohci0: OhcInterface,
     pub ohci1: OhcInterface,
     pub sd0: SDInterface,
-    pub sd1: WLANInterface,
+    pub sd1: SDInterface,
 
     /// True when the ROM mapping is disabled.
     pub rom_disabled: bool,
@@ -78,8 +78,8 @@ impl Bus {
             ehci: EhcInterface::new(),
             ohci0: OhcInterface { idx: 0, ..Default::default() },
             ohci1: OhcInterface { idx: 1, ..Default::default() },
-            sd0: SDInterface::default(),
-            sd1: WLANInterface::default(),
+            sd0: SDInterface::new_sd0(),
+            sd1: SDInterface::new_sd1(),
 
             rom_disabled: false,
             mirror_enabled: false,
