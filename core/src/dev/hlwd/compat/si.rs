@@ -60,8 +60,40 @@ impl MmioDevice for SerialInterface {
             0x04 | 0x10 | 0x1c | 0x28 => self.inbuf_h[off / 0xc] = val,
             0x08 | 0x14 | 0x20 | 0x2c => self.inbuf_l[off / 0xc] = val,
             0x30 => self.poll = val,
-            0x34 => self.comcsr = val,
-            0x38 => self.sr = val,
+            0x34 => {
+                const COMCSR_W1C_MASK: u32 = 0x9000_0000;
+                let mut new_val = val;
+
+                if new_val & COMCSR_W1C_MASK != 0 {
+                    // Ack W1C bits
+                    new_val &= !(new_val & COMCSR_W1C_MASK);
+                }
+
+                if new_val & 0x0000_0001 == 0x0000_0001 {
+                    /*
+                     * TSTART, transfer OUTLNGTH/INLNGTH bytes on channel
+                     * CHANNEL.
+                     * TODO: actually xfer
+                     */
+                    new_val &= !1;
+
+                    // set TCINT
+                    new_val |= 0x8000_0000;
+                }
+
+                self.comcsr = new_val;
+            }
+            0x38 => {
+                let mut new_val = val;
+
+                if new_val & 0x8000_0000 == 0x8000_0000 {
+                    // WR=1, write all outbufs
+                    // TODO: handle xfer
+                    new_val &= !0x8000_0000;
+                }
+
+                self.sr = new_val;
+            },
             0x3c => self.exilk = val,
             0x80..=0xfc => self.iobuf[(off - 0x80) / 4] = val,
             _ => { bail!("SI write {val:08x} to undefined offset {off:x}"); },
