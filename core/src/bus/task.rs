@@ -1,4 +1,4 @@
-use super::SDHCTask;
+use super::{SDHCTask, SdhcSlot};
 
 
 /// Some type of indirect access (from memory interface to the DDR interface).
@@ -24,7 +24,7 @@ pub enum BusTask {
     Mi { kind: IndirAccess, data: u16 },
 
     // SD Host Controller
-    SDHC(SDHCTask),
+    SDHC(SdhcSlot, SDHCTask),
 
     /// A completed 32-byte burst from the PI FIFO.
     PiFifo([u8; 32]),
