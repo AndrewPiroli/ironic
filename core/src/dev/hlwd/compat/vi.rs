@@ -499,13 +499,17 @@ impl Bus {
         use core::ops::Deref;
         let _dcr = self.hlwd.vi.dcr;
         let tfbl = (self.hlwd.vi.tfbl - 1) as usize;
+        let mut xfb_addr = tfbl;
+        if tfbl & 0x1000_0000 == 0x1000_0000 {
+            xfb_addr = (tfbl & !0x1000_0000) << 5;
+        }
         let mem1 = self.mem1.data.deref();
         // fixme resolution detection
         const FIXME_LEN: usize = FIXME_WIDTH * FIXME_HEIGHT as usize * 2;
         const FIXME_HEIGHT: u32 = 480;
         const FIXME_WIDTH: usize = 640;
         let mut yuyv_bytes = vec![0u8;FIXME_LEN];
-        yuyv_bytes.copy_from_slice(&mem1[tfbl..tfbl + FIXME_LEN]);
+        yuyv_bytes.copy_from_slice(&mem1[xfb_addr..xfb_addr + FIXME_LEN]);
         let mut img = Image::new(FIXME_WIDTH as u32, FIXME_HEIGHT);
         for packed_stride in 0..(FIXME_LEN / 4) {
             let start_byte = packed_stride * 4;
