@@ -48,6 +48,7 @@ pub(super) struct Card {
     selected: bool,
     /// Cursor into the backing memory for the transfer in progress.
     rw_index: AtomicUsize,
+    pub(super) sdstatus: [u8; 64],
 }
 
 impl Card {
@@ -82,6 +83,7 @@ impl Card {
             capacity,
             selected: Default::default(),
             rw_index: Default::default(),
+            sdstatus: [0; 64],
         }
     }
 }
@@ -105,6 +107,7 @@ impl Card {
             (false, 18) => (Some(self.cmd18(argument)), Some(TxDir::Read)),
             (false, 25) => (Some(self.cmd25(argument)), Some(TxDir::Write)),
             (true, 6)   => (Some(self.acmd6(argument)), None),
+            (false, 6)  => (Some(self.cmd6(argument)), Some(TxDir::SdStatusRead)),
             (_, 55) => {
                 self.acmd = true;
                 (Some(Response::Regular(0)), None)
@@ -232,6 +235,25 @@ impl Card {
     fn acmd6(&mut self, _argument: u32) -> Response {
         // Set bus width command, we aren't emulating individual SD bus cycles, so this is just a stub
         Response::Regular((self.state.bits_for_card_status() as u32) << 9)
+    }
+    fn cmd6(&mut self, argument: u32) -> Response { //p31
+        self.state = CardState::Data;
+        let mode = argument & (1 << 31); // 0 == check function, 1 == switch function
+        let arg_access_mode_funcs = argument & 0xf;
+        let arg_cmd_system_funcs = (argument & 0xf0) >> 4;
+        if mode != 0 {
+            error!(target: LOG, "mode {mode}, am {arg_access_mode_funcs:x} cmd sys {arg_cmd_system_funcs:x}");
+        }
+        // populate sd status with cmd6 status data
+        // Part 1 "Switch Function Status"
+        //max current consumtion - 1ma
+        self.sdstatus[62] = 1;
+        // function group 1, bit 1 Hi Speed Support
+        self.sdstatus[50] = 1;
+        // function group 1 we support switching
+        self.sdstatus[47] = 1;
+        Response::Regular((self.state.bits_for_card_status() as u32) << 9)
+
     }
 }
 

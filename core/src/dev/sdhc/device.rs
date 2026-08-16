@@ -1,3 +1,5 @@
+use anyhow::bail;
+
 use super::card::Card;
 use super::sdio::WiFi4318;
 
@@ -7,6 +9,8 @@ pub enum TxDir {
     Read,
     /// Host to device (CMD24/CMD25, CMD53 write).
     Write,
+    /// Device to Host for SD Status Register (ACMD13/CMD6)
+    SdStatusRead,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -94,6 +98,19 @@ impl SdDevice {
         match self {
             Self::Card(c) => c.read_data(buf),
             Self::Sdio(d) => d.read_data(buf),
+        }
+    }
+
+    pub(super) fn read_status(&self, buf: &mut [u8]) -> anyhow::Result<()> {
+        match self {
+            Self::Card(c) => {
+                if buf.len() == c.sdstatus.len() {
+                    buf.copy_from_slice(&c.sdstatus[..]);
+                    Ok(())
+                }
+                else { bail!("SD Status always 512 bits regardless of block len") }
+            },
+            Self::Sdio(_) => unimplemented!(),
         }
     }
 

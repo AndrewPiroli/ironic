@@ -607,7 +607,7 @@ impl SDInterface {
         self.setreg(SDRegisters::PresentState, ps | Self::ps_transfer_bits(dir, false) | 1 << 1);
         // Set Buffer Read/Write Ready Int
         let int = match dir {
-            TxDir::Read => 1 << 5,
+            TxDir::SdStatusRead | TxDir::Read => 1 << 5,
             TxDir::Write => 1 << 4,
         };
         return self.raise_int(int);
@@ -615,7 +615,7 @@ impl SDInterface {
     fn ps_transfer_bits(dir: TxDir, is_dma: bool) -> u32 {
         let (buffer_enable, transfer_active) = match dir {
             //         Buffer Read Enable, Read Transfer Active
-            TxDir::Read => (1 << 11, 1 << 9),
+            TxDir::SdStatusRead | TxDir::Read => (1 << 11, 1 << 9),
             //         Buffer Write Enable, Write Transfer Active
             TxDir::Write => (1 << 10, 1 << 8),
         };
@@ -741,6 +741,10 @@ impl Bus {
                 let mut buf = vec![0u8; BLOCK_LEN];
                 while current_addr + block_len < stop_addr && block_count > 0 {
                     match dir {
+                        TxDir::SdStatusRead => {
+                            self.sdhc(slot).device.read_status(&mut buf[0..64]).unwrap();
+                            self.dma_write(current_addr, &buf[0..64]).unwrap();
+                        }
                         TxDir::Read => {
                             self.sdhc(slot).device.read_data(&mut buf).unwrap();
                             self.dma_write(current_addr, &buf).unwrap();
