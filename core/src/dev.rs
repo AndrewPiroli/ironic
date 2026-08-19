@@ -30,7 +30,7 @@ pub const AHB_SIZE:     u32 = 0x0000_4000;
 
 // Base addresses for physical memory devices.
 pub const MEM1_BASE:    u32 = 0x0000_0000;
-pub const MEM1_MASK:    u32 = 0x017f_ffff;
+pub const MEM1_MASK:    u32 = 0x01ff_ffff;
 
 pub const MEM2_BASE:    u32 = 0x1000_0000;
 pub const MEM2_MASK:    u32 = 0x03ff_ffff;

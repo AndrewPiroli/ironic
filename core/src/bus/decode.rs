@@ -24,7 +24,7 @@ macro_rules! decl_io_handle {
 // These are declarations of all the constant DeviceHandle structures whose 
 // parameters (base address, size, etc.) will never change during runtime.
 
-decl_mem_handle!(MEM1_HANDLE, Mem1, 0x017f_ffff);
+decl_mem_handle!(MEM1_HANDLE, Mem1, 0x01ff_ffff);
 decl_mem_handle!(MEM2_HANDLE, Mem2, 0x03ff_ffff);
 
 decl_io_handle!(NAND_HANDLE, Nand,  0x0000_001f);
