@@ -53,6 +53,13 @@ impl GpioInterface {
             log::info!(target: "DEBUG_PORT", "[{:02x}]", (val & 0x00ff_0000) >> 16);
         } else if (diff & 0x0000_000c) != 0 {
             info!(target: "Other", "GPIO Fan/DCDC output {diff:08x}");
+        } else if (diff & 0x0000_0010) != 0 {
+            if (val & 0x0000_0010) != 0 {
+                info!(target: "Other", "GPIO DI Spinup enabled");
+            }
+            else {
+                info!(target: "Other", "GPIO DI Spinup disabled");
+            }
         } else if (diff & 0x0000_0020) != 0 {
             info!(target: "Other", "GPIO Disc Slot LED output");
         } else if (diff & 0x0000_0100) != 0 {
