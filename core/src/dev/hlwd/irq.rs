@@ -13,8 +13,10 @@ pub enum HollywoodIrq {
     Ehci    = 0x0000_0010,
     Ohci0   = 0x0000_0020,
     Ohci1   = 0x0000_0040,
+    /// SDHC0, wired to the front SD card slot.
     Sdhc    = 0x0000_0080,
 
+    /// SDHC1, wired to the onboard BCM4318 WLAN card.
     Wifi    = 0x0000_0100,
 
     PpcGpio = 0x0000_0400,

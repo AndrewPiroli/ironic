@@ -118,9 +118,39 @@ pub(super) struct Card {
     /// The end address for the multi-block transfer. Should equal the initial rw_index + BlockCount*BlockSize
     pub rw_stop: usize,
     pub tx_status: CardTXStatus,
+    /// When true, the in-progress PIO read is served from `switch_status_buf` (CMD6's
+    /// synthesized status block) rather than `backing_mem`.
+    pub reading_switch_status: bool,
+    /// Scratch buffer for CMD6 (SWITCH_FUNC)'s 64-byte status response.
+    pub switch_status_buf: [u8; 64],
 }
 
 impl Card {
+    /// Build an interface with no card ever inserted, e.g. for SDHC1, which is wired to the
+    /// BCM4318 WLAN card rather than an actual SD card slot.
+    pub(super) fn new_unavailable() -> Self {
+        let len = 0usize;
+        let backing_mem = BigEndianMemory::new(len, None, false).unwrap();
+        let capacity = CardCapacity::from_bytes(len);
+        Self {
+            available: false,
+            state: Default::default(),
+            backing_mem: Mutex::new(backing_mem),
+            acmd: Default::default(),
+            ocr: OcrReg::new(capacity),
+            cid: Default::default(),
+            rca: Default::default(),
+            csd: CsdReg::new(len, capacity),
+            capacity,
+            selected: Default::default(),
+            rw_index: Default::default(),
+            rw_stop: Default::default(),
+            tx_status: Default::default(),
+            reading_switch_status: false,
+            switch_status_buf: [0u8; 64],
+        }
+    }
+
     pub(super) fn new() -> Self {
         const FILENAME: &str = "sd.img";
         let mut len = 0usize;
@@ -153,7 +183,9 @@ impl Card {
             selected: Default::default(),
             rw_index: Default::default(),
             rw_stop: Default::default(),
-            tx_status: Default::default()
+            tx_status: Default::default(),
+            reading_switch_status: false,
+            switch_status_buf: [0u8; 64],
         }
     }
 }
@@ -170,7 +202,10 @@ impl Card {
             (false, 3) => { return Some(self.cmd3(argument)); },
             (false, 9) => { return Some(self.cmd9(argument)); },
             (false, 7) => { return self.cmd7(argument); },
+            (false, 6) => { return Some(self.cmd6(argument)); },
+            (false, 13) => { return Some(self.cmd13(argument)); },
             (false, 16) => { return Some(self.cmd16(argument)); },
+            (false, 17) => { return Some(self.cmd17(argument)); },
             (false, 18) => { return Some(self.cmd18(argument)); },
             (false, 25) => { return Some(self.cmd25(argument)); },
             (true, 6) => { return Some(self.acmd6(argument)); },
@@ -220,6 +255,22 @@ impl Card {
     fn cmd9(&mut self, _argument: u32) -> Response {
         Response::R2(self.csd.0)
     }
+    fn cmd13(&self, _argument: u32) -> Response {
+        Response::Regular((self.state.bits_for_card_status() as u32) << 9)
+    }
+    /// SWITCH_FUNC. We don't implement any alternate speed/current/driver-strength
+    /// functions, so every function group reports "not supported" (an all-zero status
+    /// block). Host drivers are required to treat that as "stay at default settings",
+    /// which is exactly the behavior of a real card with no optional functions.
+    fn cmd6(&mut self, _argument: u32) -> Response {
+        self.switch_status_buf = [0u8; 64];
+        self.reading_switch_status = true;
+        self.state = CardState::Data;
+        self.rw_index.store(0, std::sync::atomic::Ordering::Relaxed);
+        let response = (self.state.bits_for_card_status() as u32) << 9;
+        self.tx_status = CardTXStatus::MultiReadPending;
+        Response::Regular(response)
+    }
     fn cmd7(&mut self, argument: u32) -> Option<Response> {
         let selected_addr = (argument >> 16) as u16;
         if let Some(rca) = self.rca && selected_addr == rca.get() {
@@ -260,6 +311,18 @@ impl Card {
             CardCapacity::HighCapacity => argument as usize * 512,
             CardCapacity::StandardCapacity => argument as usize,
         }
+    }
+    fn cmd17(&mut self, argument: u32) -> Response {
+        let byte_offset = self.argument_to_byte_offset(argument);
+        log::debug!(target: "SDHC", "Issued single block transfer(R): byte offset {} (arg=0x{:x}, {:?})", byte_offset, argument, self.capacity);
+        self.state = CardState::Data;
+        self.rw_index.store(byte_offset, std::sync::atomic::Ordering::Relaxed);
+        let response = (self.state.bits_for_card_status() as u32) << 9;
+        // The single-vs-multi distinction lives in the host's TxMode/BlockCount registers,
+        // not here: the SDHC interface drives completion off BlockCount regardless, so this
+        // reuses the same pending state as CMD18.
+        self.tx_status = CardTXStatus::MultiReadPending;
+        Response::Regular(response)
     }
     fn cmd18(&mut self, argument: u32) -> Response {
         let byte_offset = self.argument_to_byte_offset(argument);
