@@ -194,8 +194,6 @@ impl GpioInterface {
             }
         }
 
-        // Commit the value to the output register
-        self.arm.output = val;
         Ok(())
     }
 }
