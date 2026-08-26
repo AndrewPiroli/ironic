@@ -40,7 +40,7 @@ impl SerialInterface {
 }
 impl MmioDevice for SerialInterface {
     type Width = u32;
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             0x00 | 0x0c | 0x18 | 0x24 => self.outbuf[off / 0xc],
             0x04 | 0x10 | 0x1c | 0x28 => self.inbuf_h[off / 0xc],
@@ -54,7 +54,7 @@ impl MmioDevice for SerialInterface {
         };
         Ok(BusPacket::Word(val))
     }
-    fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, _access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x00 | 0x0c | 0x18 | 0x24 => self.outbuf[off / 0xc] = val,
             0x04 | 0x10 | 0x1c | 0x28 => self.inbuf_h[off / 0xc] = val,

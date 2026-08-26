@@ -48,14 +48,14 @@ impl Bus {
         if self.fetch_memory(addr, bytes.len()).is_none() {
             bail!("Code patch requires backed memory at {addr:08x}");
         }
-        self.dma_write(addr, bytes)?;
+        self.dma_write(Requester::Debugger, addr, bytes)?;
         self.cache_control.invalidate();
         Ok(())
     }
 
     /// Perform a 32-bit physical memory read.
-    pub fn read32(&self, addr: u32) -> anyhow::Result<u32> {
-        let msg = self.do_read(addr, BusWidth::W)?;
+    pub fn read32(&self, requester: Requester, addr: u32) -> anyhow::Result<u32> {
+        let msg = self.do_read(requester, addr, BusWidth::W)?;
         match msg {
             BusPacket::Word(res) => Ok(res),
             _ => unreachable!(),
@@ -63,8 +63,8 @@ impl Bus {
     }
 
     /// Perform a 16-bit physical memory read.
-    pub fn read16(&self, addr: u32) -> anyhow::Result<u16> {
-        let msg = self.do_read(addr, BusWidth::H)?;
+    pub fn read16(&self, requester: Requester, addr: u32) -> anyhow::Result<u16> {
+        let msg = self.do_read(requester, addr, BusWidth::H)?;
         match msg {
             BusPacket::Half(res) => Ok(res),
             _ => unreachable!(),
@@ -72,8 +72,8 @@ impl Bus {
     }
 
     /// Perform an 8-bit physical memory read.
-    pub fn read8(&self, addr: u32) -> anyhow::Result<u8> {
-        let msg = self.do_read(addr, BusWidth::B)?;
+    pub fn read8(&self, requester: Requester, addr: u32) -> anyhow::Result<u8> {
+        let msg = self.do_read(requester, addr, BusWidth::B)?;
         match msg {
             BusPacket::Byte(res) => Ok(res),
             _ => unreachable!(),
@@ -81,56 +81,71 @@ impl Bus {
     }
 
     /// Perform a 32-bit physical memory write.
-    pub fn write32(&mut self, addr: u32, val: u32) -> anyhow::Result<()> {
-        self.do_write(addr, BusPacket::Word(val))
+    pub fn write32(&mut self, requester: Requester, addr: u32, val: u32) -> anyhow::Result<()> {
+        self.do_write(requester, addr, BusPacket::Word(val))
     }
     /// Perform a 16-bit physical memory write.
-    pub fn write16(&mut self, addr: u32, val: u16) -> anyhow::Result<()> {
-        self.do_write(addr, BusPacket::Half(val))
+    pub fn write16(&mut self, requester: Requester, addr: u32, val: u16) -> anyhow::Result<()> {
+        self.do_write(requester, addr, BusPacket::Half(val))
     }
     /// Perform an 8-bit physical memory write.
-    pub fn write8(&mut self, addr: u32, val: u8) -> anyhow::Result<()> {
-        self.do_write(addr, BusPacket::Byte(val))
+    pub fn write8(&mut self, requester: Requester, addr: u32, val: u8) -> anyhow::Result<()> {
+        self.do_write(requester, addr, BusPacket::Byte(val))
     }
 
     /// Perform a DMA write operation.
-    pub fn dma_write(&mut self, addr: u32, buf: &[u8]) -> anyhow::Result<()> {
-        self.do_dma_write(addr, buf)
+    pub fn dma_write(&mut self, requester: Requester, addr: u32, buf: &[u8]) -> anyhow::Result<()> {
+        self.do_dma_write(requester, addr, buf)
     }
     /// Perform a DMA read operation.
-    pub fn dma_read(&self, addr: u32, buf: &mut [u8]) -> anyhow::Result<()> {
-        self.do_dma_read(addr, buf)
+    pub fn dma_read(&self, requester: Requester, addr: u32, buf: &mut [u8]) -> anyhow::Result<()> {
+        self.do_dma_read(requester, addr, buf)
     }
 
 }
 
 impl Bus {
+    /// Derive the security attributes placed on a transaction.
+    fn access_context(&self, requester: Requester, addr: u32, dev: Device) -> AccessContext {
+        if !matches!(dev, Device::Io(_)) || (addr & 0xff00_0000) != 0x0d00_0000 {
+            return AccessContext::new(requester, None);
+        }
+
+        AccessContext::ahb(
+            requester,
+            (addr & 0x0080_0000) != 0,
+            (self.hlwd.busctrl.ahbprot & (1 << 31)) != 0,
+        )
+    }
+
     /// Dispatch a physical read access (to memory, or some I/O device).
-    fn do_read(&self, addr: u32, width: BusWidth) -> anyhow::Result<BusPacket> {
+    fn do_read(&self, requester: Requester, addr: u32, width: BusWidth) -> anyhow::Result<BusPacket> {
         let handle = match self.decode_phys_addr(addr) {
             Some (h)=> {h},
             None => { bail!("Unresolved physical address {addr:08x}. current cycle count: {}", self.cycle); }
         };
 
+        let access = self.access_context(requester, addr, handle.dev);
         let off = (addr & handle.mask) as usize;
         let resp = match handle.dev {
-            Device::Mem(dev) => self.do_mem_read(dev, off, width)?,
-            Device::Io(dev) => self.do_mmio_read(dev, off, width)?,
+            Device::Mem(dev) => self.do_mem_read(access, dev, off, width)?,
+            Device::Io(dev) => self.do_mmio_read(access, dev, off, width)?,
         };
         Ok(resp)
     }
 
     /// Dispatch a physical write access (to memory, or some I/O device).
-    fn do_write(&mut self, addr: u32, msg: BusPacket) -> anyhow::Result<()> {
+    fn do_write(&mut self, requester: Requester, addr: u32, msg: BusPacket) -> anyhow::Result<()> {
         let handle = match self.decode_phys_addr(addr) {
             Some(val) => val,
             None => { bail!("Unresolved physical address {addr:08x}"); },
         };
 
+        let access = self.access_context(requester, addr, handle.dev);
         let off = (addr & handle.mask) as usize;
         match handle.dev {
-            Device::Mem(dev) => self.do_mem_write(dev, off, msg)?,
-            Device::Io(dev) => self.do_mmio_write(dev, off, msg)?,
+            Device::Mem(dev) => self.do_mem_write(access, dev, off, msg)?,
+            Device::Io(dev) => self.do_mmio_write(access, dev, off, msg)?,
         };
         Ok(())
     }
@@ -138,7 +153,7 @@ impl Bus {
 
 impl Bus {
     /// Dispatch a physical read access to some memory device.
-    fn do_mem_read(&self, dev: MemDevice, off: usize, width: BusWidth) -> anyhow::Result<BusPacket> {
+    fn do_mem_read(&self, _access: AccessContext, dev: MemDevice, off: usize, width: BusWidth) -> anyhow::Result<BusPacket> {
         use MemDevice::*;
         use BusPacket::*;
         let target_ref = match dev {
@@ -157,7 +172,7 @@ impl Bus {
     }
 
     /// Dispatch a physical write access to some memory device.
-    fn do_mem_write(&mut self, dev: MemDevice, off: usize, msg: BusPacket) -> anyhow::Result<()> {
+    fn do_mem_write(&mut self, _access: AccessContext, dev: MemDevice, off: usize, msg: BusPacket) -> anyhow::Result<()> {
         use MemDevice::*;
         use BusPacket::*;
         let target_ref = match dev {
@@ -175,12 +190,34 @@ impl Bus {
         };
         Ok(())
     }
+
+    fn do_mem_dma_write(&mut self, _access: AccessContext, dev: MemDevice, off: usize, buf: &[u8]) -> anyhow::Result<()> {
+        match dev {
+            MemDevice::MaskRom => bail!("Bus error: DMA write on mask ROM"),
+            MemDevice::Sram0 => self.sram0.write_buf(off, buf)?,
+            MemDevice::Sram1 => self.sram1.write_buf(off, buf)?,
+            MemDevice::Mem1 => self.mem1.write_buf(off, buf)?,
+            MemDevice::Mem2 => self.mem2.write_buf(off, buf)?,
+        }
+        Ok(())
+    }
+
+    fn do_mem_dma_read(&self, _access: AccessContext, dev: MemDevice, off: usize, buf: &mut [u8]) -> anyhow::Result<()> {
+        match dev {
+            MemDevice::MaskRom => bail!("Bus error: DMA read on mask ROM"),
+            MemDevice::Sram0 => self.sram0.read_buf(off, buf)?,
+            MemDevice::Sram1 => self.sram1.read_buf(off, buf)?,
+            MemDevice::Mem1 => self.mem1.read_buf(off, buf)?,
+            MemDevice::Mem2 => self.mem2.read_buf(off, buf)?,
+        }
+        Ok(())
+    }
 }
 
 impl Bus {
     /// Dispatch a DMA write to some memory device.
-    fn do_dma_write(&mut self, addr: u32, buf: &[u8]) -> anyhow::Result<()> {
-        use MemDevice::*;
+    fn do_dma_write(&mut self, requester: Requester, addr: u32, buf: &[u8]) -> anyhow::Result<()> {
+        let access = AccessContext::new(requester, None);
         // SRAM DMA check - not sure about this one
         if self.resolve_dma_sram(addr).is_some() {
             let mut addr = addr;
@@ -190,11 +227,7 @@ impl Bus {
                     bail!("DMA write crossed the end of the SRAM aperture at {addr:08x}");
                 };
                 let len = available.min(buf.len());
-                match dev {
-                    Sram0 => self.sram0.write_buf(off, &buf[..len])?,
-                    Sram1 => self.sram1.write_buf(off, &buf[..len])?,
-                    _ => unreachable!(),
-                }
+                self.do_mem_dma_write(access, dev, off, &buf[..len])?;
                 addr = addr.checked_add(len as u32)
                     .ok_or_else(|| anyhow::anyhow!("DMA write address overflow"))?;
                 buf = &buf[len..];
@@ -211,26 +244,21 @@ impl Bus {
 
         let off = (addr & handle.mask) as usize;
         match handle.dev {
-            Device::Mem(dev) => { match dev {
-                MaskRom => { bail!("Bus error: DMA write on mask ROM"); },
-                Sram0   => self.sram0.write_buf(off, buf)?,
-                Sram1   => self.sram1.write_buf(off, buf)?,
-                Mem1    => self.mem1.write_buf(off, buf)?,
-                Mem2    => self.mem2.write_buf(off, buf)?,
-            }},
+            Device::Mem(dev) => self.do_mem_dma_write(access, dev, off, buf)?,
             Device::Io(dev) => {
                 let Ok(burst) = <[u8; 32]>::try_from(buf) else {
                     bail!("Bus error: unsupported {}B DMA write to I/O device {dev:?}", buf.len());
                 };
-                self.do_mmio_write(dev, off, BusPacket::_32Byte(burst))?;
+                let mmio_access = self.access_context(requester, addr, handle.dev);
+                self.do_mmio_write(mmio_access, dev, off, BusPacket::_32Byte(burst))?;
             },
         }
         Ok(())
     }
 
     /// Dispatch a DMA read to some memory device.
-    fn do_dma_read(&self, addr: u32, buf: &mut [u8]) -> anyhow::Result<()> {
-        use MemDevice::*;
+    fn do_dma_read(&self, requester: Requester, addr: u32, buf: &mut [u8]) -> anyhow::Result<()> {
+        let access = AccessContext::new(requester, None);
         // SRAM DMA check - not sure about this one
         if self.resolve_dma_sram(addr).is_some() {
             let mut addr = addr;
@@ -240,11 +268,7 @@ impl Bus {
                     bail!("DMA read crossed the end of the SRAM aperture at {addr:08x}");
                 };
                 let len = available.min(buf.len());
-                match dev {
-                    Sram0 => self.sram0.read_buf(off, &mut buf[..len])?,
-                    Sram1 => self.sram1.read_buf(off, &mut buf[..len])?,
-                    _ => unreachable!(),
-                }
+                self.do_mem_dma_read(access, dev, off, &mut buf[..len])?;
                 addr = addr.checked_add(len as u32)
                     .ok_or_else(|| anyhow::anyhow!("DMA read address overflow"))?;
                 buf = &mut buf[len..];
@@ -259,13 +283,7 @@ impl Bus {
 
         let off = (addr & handle.mask) as usize;
         match handle.dev {
-            Device::Mem(dev) => { match dev {
-                MaskRom => { bail!("Bus error: DMA read on mask ROM".to_string()); },
-                Sram0   => self.sram0.read_buf(off, buf)?,
-                Sram1   => self.sram1.read_buf(off, buf)?,
-                Mem1    => self.mem1.read_buf(off, buf)?,
-                Mem2    => self.mem2.read_buf(off, buf)?,
-            }},
+            Device::Mem(dev) => self.do_mem_dma_read(access, dev, off, buf)?,
             _ => { bail!("Bus error: DMA read on memory-mapped I/O region".to_string()); },
         }
         Ok(())

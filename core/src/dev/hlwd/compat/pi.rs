@@ -142,7 +142,7 @@ impl ProcessorInterface {
 
 impl MmioDevice for ProcessorInterface {
     type Width = u32;
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             0x00 => self.intsr.0,
             0x04 => self.intmr.0,
@@ -159,7 +159,7 @@ impl MmioDevice for ProcessorInterface {
         };
         Ok(BusPacket::Word(val))
     }
-    fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, _access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x00 => {
                 debug!(target: "PI", "status bits {:08x} cleared", val);

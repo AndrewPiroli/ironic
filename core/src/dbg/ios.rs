@@ -70,7 +70,7 @@ pub fn read_string(cpu: &Cpu, ptr: u32) -> anyhow::Result<String> {
     let paddr = cpu.translate(TLBReq::new(ptr, Access::Debug))?;
 
     let mut line_buf = [0u8; 64];
-    cpu.bus.read().dma_read(paddr, &mut line_buf)?;
+    cpu.bus.read().dma_read(crate::bus::prim::Requester::Debugger, paddr, &mut line_buf)?;
     if log_enabled!(target: "SYSCALL", log::Level::Trace) {
         let mut msg = String::new();
         for chunk in line_buf.chunks_exact(8) {

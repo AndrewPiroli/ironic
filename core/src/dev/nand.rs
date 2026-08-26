@@ -197,7 +197,7 @@ impl NandInterface {
 
 impl MmioDevice for NandInterface {
     type Width = u32;
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off { 
             //0x00 => self.reg.ctrl,
             0x00 => 0x0000_0001,
@@ -215,7 +215,7 @@ impl MmioDevice for NandInterface {
         Ok(BusPacket::Word(val))
     }
 
-    fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, _access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x00 => {
                 // When this bit is set, emit command to NAND flash
@@ -273,8 +273,8 @@ impl Bus {
 
         //info!(target: "Other", "{:?}", local_buf.hex_dump());
         // Do the DMA writes to memory
-        self.dma_write(reg.databuf, &local_buf[..0x800])?;
-        self.dma_write(reg.eccbuf, &local_buf[0x800..])?;
+        self.dma_write(Requester::Soc, reg.databuf, &local_buf[..0x800])?;
+        self.dma_write(Requester::Soc, reg.eccbuf, &local_buf[0x800..])?;
 
         // Compute and write the ECC bytes for the data
         for i in 0..4 {
@@ -282,7 +282,7 @@ impl Bus {
             let new_ecc = calc_ecc(&mut local_buf[(i * 0x200)..]);
             // let old_ecc = self.read32(addr);
             //info!(target: "Other", "NND old_ecc={:08x} new_ecc={:08x}", old_ecc, new_ecc);
-            self.write32(addr, new_ecc)?;
+            self.write32(Requester::Soc, addr, new_ecc)?;
         }
         Ok(())
     }
@@ -291,7 +291,7 @@ impl Bus {
     fn nand_write_page(&mut self, cmd: &NandCmd, reg: &NandRegisters) -> anyhow::Result<()> {
         // Read from memory
         let mut local_buf = vec![0; cmd.len as usize];
-        self.dma_read(reg.databuf, &mut local_buf)?;
+        self.dma_read(Requester::Soc, reg.databuf, &mut local_buf)?;
 
         let off = (reg.current_page as usize * NAND_PAGE_LEN) + 
             reg.current_poff as usize;
@@ -302,7 +302,7 @@ impl Bus {
             for i in 0..4 {
                 let addr = (reg.eccbuf ^ 0x40) + (i as u32 * 4);
                 let new_ecc = calc_ecc(&mut local_buf[(i * 0x200)..]);
-                self.write32(addr, new_ecc)?;
+                self.write32(Requester::Soc, addr, new_ecc)?;
             }
         }
         Ok(())
@@ -331,10 +331,10 @@ impl Bus {
                     },
                     PrefixRead  => next_cycle = reg._cycle + 1,
                     PrefixErase => next_cycle = reg._cycle + 1,
-                    ReadId      => self.dma_write(reg.databuf, &NAND_ID)?,
+                    ReadId      => self.dma_write(Requester::Soc, reg.databuf, &NAND_ID)?,
                     ReadStatus  => {
                         let status_register: [u8;1] = [0xe0];
-                        self.dma_write(reg.databuf, &status_register)?;
+                        self.dma_write(Requester::Soc, reg.databuf, &status_register)?;
                     },
                     Reset       => {},
                     _ => { bail!("NAND unknown cycle 0 opcd {:?}", cmd.opcd); },

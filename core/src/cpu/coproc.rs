@@ -257,7 +257,7 @@ impl SystemControl {
         let val = match tlb_inner.get(&addr) {
             Some(val) => *val, // TLB hit
             None => { // miss
-                let val = bus.read32(addr)?;
+                let val = bus.read32(crate::bus::prim::Requester::Arm, addr)?;
                 tlb_inner.insert(addr, val);
                 val
             },

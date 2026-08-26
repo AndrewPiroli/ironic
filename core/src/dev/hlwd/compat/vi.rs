@@ -236,11 +236,11 @@ impl VideoInterface {
 }
 
 impl MmioDeviceMultiWidth for VideoInterface {
-    fn read8(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read8(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         bail!("VI unsupported 8-bit read from offset {off:x}");
     }
 
-    fn read16(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read16(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             0x00 => self.vtr,
             0x02 => self.dcr,
@@ -310,7 +310,7 @@ impl MmioDeviceMultiWidth for VideoInterface {
         };
         Ok(BusPacket::Half(val))
     }
-    fn read32(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read32(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             0x00 => ((self.vtr as u32) << 16) | (self.dcr as u32),
             0x04 => self.htr0,
@@ -350,11 +350,11 @@ impl MmioDeviceMultiWidth for VideoInterface {
     }
 
 
-    fn write8(&mut self, off: usize, val: u8) -> anyhow::Result<Option<BusTask>> {
+    fn write8(&mut self, _access: AccessContext, off: usize, val: u8) -> anyhow::Result<Option<BusTask>> {
         bail!("VI unsupported 8-bit write {val:02x} to offset {off:x}");
     }
 
-    fn write16(&mut self, off: usize, val: u16) -> anyhow::Result<Option<BusTask>> {
+    fn write16(&mut self, _access: AccessContext, off: usize, val: u16) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x00 => self.vtr = val,
             0x02 => {
@@ -446,7 +446,7 @@ impl MmioDeviceMultiWidth for VideoInterface {
         Ok(None)
     }
 
-    fn write32(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write32(&mut self, _access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x00 => { self.vtr = (val >> 16) as u16; self.dcr = (val & 0xffff) as u16; },
             0x04 => self.htr0 = val,

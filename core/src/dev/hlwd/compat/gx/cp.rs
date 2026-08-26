@@ -351,7 +351,7 @@ impl Bus {
     pub fn gx_process_fifo(&mut self) -> anyhow::Result<()> {
         while self.hlwd.gx.cp.fifo_rw_distance != 0 {
             // We at least have an opcode, handle it
-            let opc_byte = self.read8(self.gx_fifo_addr(0))?;
+            let opc_byte = self.read8(Requester::Soc, self.gx_fifo_addr(0))?;
             let mut consumed = 1;
             let mut needed = 0;
 
@@ -369,8 +369,8 @@ impl Bus {
                             }
                             consumed = 6;
 
-                            let reg = self.read8(self.gx_fifo_addr(1))?;
-                            let data = self.read32(self.gx_fifo_addr(2))?;
+                            let reg = self.read8(Requester::Soc, self.gx_fifo_addr(1))?;
+                            let data = self.read32(Requester::Soc, self.gx_fifo_addr(2))?;
                             debug!(target: "CP", " -> reg = {reg:02x}, data = {data:08x}");
                             self.hlwd.gx.cp.write_reg(reg, data);
                         },
@@ -381,14 +381,14 @@ impl Bus {
                                 break 'opc_match;
                             }
 
-                            let len: u32 = self.read16(self.gx_fifo_addr(1))? as u32 + 1;
+                            let len: u32 = self.read16(Requester::Soc, self.gx_fifo_addr(1))? as u32 + 1;
                             if self.hlwd.gx.cp.fifo_rw_distance < 1 + 2 + 2 + (4 * len) {
                                 needed = (1 + 2 + 2 + (4 * len)) - self.hlwd.gx.cp.fifo_rw_distance;
                                 break 'opc_match;
                             }
 
                             consumed = 1 + 2 + 2 + (4 * len);
-                            let addr = self.read16(self.gx_fifo_addr(3))?;
+                            let addr = self.read16(Requester::Soc, self.gx_fifo_addr(3))?;
                             debug!(target: "CP", " -> len = {len}, addr = {addr:04x}");
 
                             // TODO: write [len] XF regs
@@ -408,7 +408,7 @@ impl Bus {
                             }
                             consumed = 5;
 
-                            let operand = self.read32(self.gx_fifo_addr(1))?;
+                            let operand = self.read32(Requester::Soc, self.gx_fifo_addr(1))?;
                             let reg = ((operand & 0xff00_0000) >> 24) as u8;
                             let data = operand & 0x00ff_ffff;
                             debug!(target: "CP", " -> reg = {reg:02x}, data = {data:06x}");
@@ -432,7 +432,7 @@ impl Bus {
                                     break 'opc_match;
                                 }
 
-                                let num_vtx = self.read16(self.gx_fifo_addr(1))? as u32;
+                                let num_vtx = self.read16(Requester::Soc, self.gx_fifo_addr(1))? as u32;
 
                                 let prim_type = match GxPrimType::try_from(prim_type_raw) {
                                     Ok(prim_type) => prim_type,
@@ -462,7 +462,7 @@ impl Bus {
                                 let rd_ptr = self.hlwd.gx.cp.fifo_rd_ptr;
                                 let mut dump = String::new();
                                 for i in 0..48u32 {
-                                    let byte = self.read8(self.gx_fifo_addr(i)).unwrap_or(0xee);
+                                    let byte = self.read8(Requester::Soc, self.gx_fifo_addr(i)).unwrap_or(0xee);
                                     dump.push_str(&format!("{byte:02x} "));
                                 }
                                 error!(target: "CP",
@@ -495,13 +495,13 @@ impl Bus {
     }
 }
 impl MmioDeviceMultiWidth for CommandProcessor {
-    fn read8(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read8(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let _val = match off {
             _ => bail!("CP 8-bit read to undefined offset {off:x}"),
         };
         //Ok(BusPacket::Byte(val))
     }
-    fn read16(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read16(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             0x00 => self.status(),
             0x02 => self.cr,
@@ -532,7 +532,7 @@ impl MmioDeviceMultiWidth for CommandProcessor {
         };
         Ok(BusPacket::Half(val))
     }
-    fn read32(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read32(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             0x20 => self.fifo_base,
             0x24 => self.fifo_end,
@@ -546,13 +546,13 @@ impl MmioDeviceMultiWidth for CommandProcessor {
         };
         Ok(BusPacket::Word(val))
     }
-    fn write8(&mut self, off: usize, _val: u8) -> anyhow::Result<Option<BusTask>> {
+    fn write8(&mut self, _access: AccessContext, off: usize, _val: u8) -> anyhow::Result<Option<BusTask>> {
         match off {
             _ => bail!("CP 8-bit write to undefined offset {off:x}"),
         };
         //Ok(None)
     }
-    fn write16(&mut self, off: usize, val: u16) -> anyhow::Result<Option<BusTask>> {
+    fn write16(&mut self, _access: AccessContext, off: usize, val: u16) -> anyhow::Result<Option<BusTask>> {
         match off {
             // Only bits 0-5 are defined, the rest are masked off, matching Dolphin
             0x02 => self.cr = val & 0x3f,
@@ -585,7 +585,7 @@ impl MmioDeviceMultiWidth for CommandProcessor {
         self.update_breakpoint_latch();
         Ok(None)
     }
-    fn write32(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write32(&mut self, _access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x20 => self.fifo_base = val,
             0x24 => self.fifo_end = val,

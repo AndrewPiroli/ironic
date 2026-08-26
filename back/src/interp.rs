@@ -26,6 +26,7 @@ use crate::decode::arm::*;
 use crate::decode::thumb::*;
 
 use ironic_core::bus::*;
+use ironic_core::bus::prim::Requester;
 use ironic_core::cpu::{Cpu, CpuRes};
 use ironic_core::cpu::reg::Reg;
 use ironic_core::cpu::excep::ExceptionType;
@@ -196,7 +197,7 @@ impl InterpBackend {
         // Probably a limitation of their early semihosting hardware
         // We buffer that internally until we see a newline, that's our cue to print
         let mut line_buf = [0u8; 16];
-        self.bus.read().dma_read(paddr, &mut line_buf)?;
+        self.bus.read().dma_read(Requester::Debugger, paddr, &mut line_buf)?;
 
         let s = std::str::from_utf8(&line_buf)?
             .trim_matches(char::from(0));
@@ -415,7 +416,7 @@ impl Backend for InterpBackend {
                     let start = header.offset as usize;
                     let end = start + header.filesz as usize;
                     info!(target: "Custom Kernel", "Loading offset: {:#10x}  phys addr: {:#10x} filesz: {:#10x}", header.offset, header.paddr, header.filesz);
-                    bus.dma_write(header.paddr as u32, &kernel_bytes[start..end])?;
+                    bus.dma_write(Requester::Debugger, header.paddr as u32, &kernel_bytes[start..end])?;
                 }
             }
             self.boot_status = BootStatus::UserKernel;

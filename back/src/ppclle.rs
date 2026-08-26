@@ -4,6 +4,7 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)]
 use ironic_core::bus::Bus;
+use ironic_core::bus::prim::Requester;
 use ironic_core::dev::hlwd::irq::*;
 use std::sync::Arc;
 use parking_lot::RwLock;
@@ -68,7 +69,7 @@ unsafe extern "C" fn bus_hook(
                 return;
             }
             let target = (addr - EXI_VECTOR_LO) + EXI_VECTOR_TARGET;
-            let val = match try_read_bounded(bus).read32(target) {
+            let val = match try_read_bounded(bus).read32(Requester::Ppc, target) {
                 Ok(v) => v,
                 Err(e) => { error!(target: "PPCLLE", "EXI vector read failed at {target:08x}: {e}"); 0 }
             };
@@ -85,11 +86,11 @@ unsafe extern "C" fn bus_hook(
             1 => {
                 if is_write {
                     let val = *(data as *const u8);
-                    if let Err(e) = try_write_bounded(bus).write8(addr, val) {
+                    if let Err(e) = try_write_bounded(bus).write8(Requester::Ppc, addr, val) {
                         error!(target: "PPCLLE", "write8 to {addr:08x} failed: {e}");
                     }
                 } else {
-                    let val = match try_read_bounded(bus).read8(addr) {
+                    let val = match try_read_bounded(bus).read8(Requester::Ppc, addr) {
                         Ok(v) => v,
                         Err(e) => { error!(target: "PPCLLE", "read8 from {addr:08x} failed: {e}"); 0 }
                     };
@@ -101,11 +102,11 @@ unsafe extern "C" fn bus_hook(
                     let mut raw = [0u8; 2];
                     (data as *const u8).copy_to_nonoverlapping(raw.as_mut_ptr(), 2);
                     let val = u16::from_be_bytes(raw);
-                    if let Err(e) = try_write_bounded(bus).write16(addr, val) {
+                    if let Err(e) = try_write_bounded(bus).write16(Requester::Ppc, addr, val) {
                         error!(target: "PPCLLE", "write16 to {addr:08x} failed: {e}");
                     }
                 } else {
-                    let val = match try_read_bounded(bus).read16(addr) {
+                    let val = match try_read_bounded(bus).read16(Requester::Ppc, addr) {
                         Ok(v) => v,
                         Err(e) => { error!(target: "PPCLLE", "read16 from {addr:08x} failed: {e}"); 0 }
                     };
@@ -117,11 +118,11 @@ unsafe extern "C" fn bus_hook(
                     let mut raw = [0u8; 4];
                     (data as *const u8).copy_to_nonoverlapping(raw.as_mut_ptr(), 4);
                     let val = u32::from_be_bytes(raw);
-                    if let Err(e) = try_write_bounded(bus).write32(addr, val) {
+                    if let Err(e) = try_write_bounded(bus).write32(Requester::Ppc, addr, val) {
                         error!(target: "PPCLLE", "write32 to {addr:08x} failed: {e}");
                     }
                 } else {
-                    let val = match try_read_bounded(bus).read32(addr) {
+                    let val = match try_read_bounded(bus).read32(Requester::Ppc, addr) {
                         Ok(v) => v,
                         Err(e) => { error!(target: "PPCLLE", "read32 from {addr:08x} failed: {e}"); 0 }
                     };
@@ -132,10 +133,10 @@ unsafe extern "C" fn bus_hook(
                 // Cacheline fill/writeback: raw bytes, no numeric byte-swap needed.
                 let slice = core::slice::from_raw_parts_mut(data as *mut u8, 32);
                 if is_write {
-                    if let Err(e) = try_write_bounded(bus).dma_write(addr, slice) {
+                    if let Err(e) = try_write_bounded(bus).dma_write(Requester::Ppc, addr, slice) {
                         error!(target: "PPCLLE", "cacheline writeback to {addr:08x} failed: {e}");
                     }
-                } else if let Err(e) = try_read_bounded(bus).dma_read(addr, slice) {
+                } else if let Err(e) = try_read_bounded(bus).dma_read(Requester::Ppc, addr, slice) {
                     error!(target: "PPCLLE", "cacheline fill from {addr:08x} failed: {e}");
                 }
             }
@@ -246,7 +247,7 @@ impl PpcEmu {
                         header.offset, header.paddr, phys_addr, header.filesz);
                     let start = header.offset as usize;
                     let end = start + header.filesz as usize;
-                    bus.dma_write(phys_addr, &bytes[start..end])?;
+                    bus.dma_write(Requester::Ppc, phys_addr, &bytes[start..end])?;
                 }
             }
             Ok(elf_file.ehdr.entry as u32)

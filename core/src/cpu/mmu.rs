@@ -5,6 +5,7 @@ pub mod prim;
 use crate::cpu::mmu::prim::*;
 use crate::cpu::Cpu;
 use crate::bus::Bus;
+use crate::bus::prim::Requester;
 
 use parking_lot::RawRwLock;
 use parking_lot::lock_api::RwLockReadGuard;
@@ -20,31 +21,31 @@ pub(crate) struct Translation {
 impl Cpu {
     pub fn read32(&self, addr: u32) -> anyhow::Result<u32> {
         let paddr = self.translate(TLBReq::new(addr, Access::Read))?;
-        let res = self.bus.read().read32(paddr)?;
+        let res = self.bus.read().read32(Requester::Arm, paddr)?;
         Ok(res)
     }
     pub fn read16(&self, addr: u32) -> anyhow::Result<u16> {
         let paddr = self.translate(TLBReq::new(addr, Access::Read))?;
-        let res = self.bus.read().read16(paddr)?;
+        let res = self.bus.read().read16(Requester::Arm, paddr)?;
         Ok(res)
     }
     pub fn read8(&self, addr: u32) -> anyhow::Result<u8> {
         let paddr = self.translate(TLBReq::new(addr, Access::Read))?;
-        let res = self.bus.read().read8(paddr)?;
+        let res = self.bus.read().read8(Requester::Arm, paddr)?;
         Ok(res)
     }
 
     pub fn write32(&mut self, addr: u32, val: u32) -> anyhow::Result<()> {
         let paddr = self.translate(TLBReq::new(addr, Access::Write))?;
-        self.bus.write().write32(paddr, val)
+        self.bus.write().write32(Requester::Arm, paddr, val)
     }
     pub fn write16(&mut self, addr: u32, val: u32) -> anyhow::Result<()> {
         let paddr = self.translate(TLBReq::new(addr, Access::Write))?;
-        self.bus.write().write16(paddr, val as u16)
+        self.bus.write().write16(Requester::Arm, paddr, val as u16)
     }
     pub fn write8(&mut self, addr: u32, val: u32) -> anyhow::Result<()> {
         let paddr = self.translate(TLBReq::new(addr, Access::Write))?;
-        self.bus.write().write8(paddr, val as u8)
+        self.bus.write().write8(Requester::Arm, paddr, val as u8)
     }
 }
 
@@ -119,7 +120,7 @@ impl Cpu {
             }
             _ => bail!("l2_fetch requires an L1::Coarse or L1::Fine descriptor"),
         };
-        let val = bus.read32(addr)?;
+        let val = bus.read32(Requester::Arm, addr)?;
 
         L2Descriptor::from_u32_checked(val).with_context(|| format!("l2_fetch: VirtualAddr: 0x{:x} L1Descriptor: {d:?}", vaddr.0))
     }

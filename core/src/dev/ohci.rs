@@ -41,7 +41,7 @@ pub struct OhcInterface {
 
 impl MmioDevice for OhcInterface {
     type Width = u32;
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             0x00 => 0x0000_0110,
             // NOTE: Everything is wired to 0 in skyeye; good enough for now
@@ -57,7 +57,7 @@ impl MmioDevice for OhcInterface {
         debug!(target: "XHCI", "OH{} read {val:08x} at {off:x}", self.idx);
         Ok(BusPacket::Word(val))
     }
-    fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, _access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         debug!(target: "XHCI", "OH{} write {val:08x} at {off:x}", self.idx);
         match off {
             0x04 => self.ctrl = val,

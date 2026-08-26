@@ -14,7 +14,7 @@ pub struct AudioInterface {
 }
 impl MmioDevice for AudioInterface {
     type Width = u32;
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             0x00 => self.control,
             0x04 => self.volume,
@@ -24,7 +24,7 @@ impl MmioDevice for AudioInterface {
         };
         Ok(BusPacket::Word(val))
     }
-    fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, _access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x00 => self.control = val,
             0x04 => self.volume = val,

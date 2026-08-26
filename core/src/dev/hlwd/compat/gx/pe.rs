@@ -46,7 +46,7 @@ impl PixelEngine {
 }
 impl MmioDevice for PixelEngine {
     type Width = u16;
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             0x00 => self.z_conf,
             0x02 => self.alpha_conf,
@@ -59,7 +59,7 @@ impl MmioDevice for PixelEngine {
         };
         Ok(BusPacket::Half(val))
     }
-    fn write(&mut self, off: usize, val: u16) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, _access: AccessContext, off: usize, val: u16) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x00 => self.z_conf = val,
             0x02 => self.alpha_conf = val,

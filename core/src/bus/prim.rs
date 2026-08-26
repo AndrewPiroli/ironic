@@ -1,5 +1,6 @@
 
 use core::slice;
+use std::fmt;
 use std::mem;
 
 /// Helper functions implemented on numeric primitives.
@@ -75,7 +76,6 @@ pub enum IoDevice {
     Ohci1,
     Sdhc0,
     Sdhc1,
-
     Hlwd, 
     Ahb, 
     Ddr,
@@ -92,18 +92,84 @@ pub enum IoDevice {
 }
 
 /// A message on the bus containing some value.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BusPacket { Byte(u8), Half(u16), Word(u32), _32Byte([u8; 32]) }
 
 /// The width of an access on the bus.
 #[derive(Debug, Clone, Copy)]
 pub enum BusWidth { B, H, W, _32B }
 
+/// The device which initiated a bus transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Requester {
+    /// External Software / Internal Emulator Features
+    Debugger,
+    /// DMA-capable block within Hollywood (e.g. SDHC)
+    Soc,
+    /// Starlet/IOP
+    Arm,
+    /// Broadway
+    Ppc,
+}
+
+/// Privilege carried by an AHB MMIO transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Privilege {
+    Kernel,
+    User,
+}
+
+/// Security attributes carried with a bus transaction.
+///
+/// `privilege` is only present for AHB MMIO. Memory and legacy Flipper MMIO
+/// still carry the requester (e.g. for denying PPC access to upper MEM2),
+/// but do not have an AHB privilege level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AccessContext {
+    pub requester: Requester,
+    pub privilege: Option<Privilege>,
+}
+
+/// Denied by Hollywood access controls.
+#[derive(Debug)]
+pub struct AccessError(pub String);
+
+impl fmt::Display for AccessError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for AccessError {}
+
+impl AccessContext {
+    pub const fn new(requester: Requester, privilege: Option<Privilege>) -> Self {
+        Self { requester, privilege }
+    }
+
+    pub const fn is_kernel(self) -> bool {
+        matches!(self.privilege, Some(Privilege::Kernel))
+    }
+
+    pub const fn ahb(requester: Requester, trusted_alias: bool, ppc_kernel: bool) -> Self {
+        let privilege = match requester {
+            Requester::Debugger => Privilege::Kernel,
+            Requester::Soc => Privilege::Kernel,
+            Requester::Arm if trusted_alias => Privilege::Kernel,
+            Requester::Arm => Privilege::User,
+            Requester::Ppc if trusted_alias && ppc_kernel => Privilege::Kernel,
+            Requester::Ppc => Privilege::User,
+        };
+        Self::new(requester, Some(privilege))
+    }
+}
+
 /// An abstract request on the bus.
 #[derive(Debug)]
 pub struct BusReq {
     pub handle: DeviceHandle,
     pub msg: Option<BusPacket>,
+    pub access: AccessContext,
 }
 
 /// An abstract reply to a bus request.
@@ -111,5 +177,3 @@ pub struct BusReq {
 pub struct BusRep {
     pub msg: Option<BusPacket>,
 }
-
-

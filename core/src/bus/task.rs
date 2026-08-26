@@ -1,4 +1,5 @@
 use super::{SDHCTask, SdhcSlot};
+use crate::bus::prim::AccessContext;
 
 
 /// Some type of indirect access (from memory interface to the DDR interface).
@@ -34,5 +35,6 @@ pub enum BusTask {
 pub struct Task {
     pub kind: BusTask,
     pub target_cycle: usize,
+    pub access: AccessContext,
 }
 

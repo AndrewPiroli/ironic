@@ -57,7 +57,7 @@ impl ShaInterface {
 impl MmioDevice for ShaInterface {
     type Width = u32;
 
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             0x00 => 0, //self.ctrl,
             0x08 => self.state.digest[0],
@@ -70,7 +70,7 @@ impl MmioDevice for ShaInterface {
         Ok(BusPacket::Word(val))
     }
 
-    fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, _access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x00 => {
                 self.ctrl = val;
@@ -104,7 +104,7 @@ impl Bus {
             warn!(target: "SHA", "Unaligned SHA src address {:08x}; DMA will read from next 64-byte boundary", src);
         }
         src = (src + 0x3f) & !0x3f;
-        self.dma_read(src, &mut sha_buf)?;
+        self.dma_read(Requester::Soc, src, &mut sha_buf)?;
         if log_enabled!(target: "SHA", log::Level::Trace) {
             let mut msg = format!("SHA DMA Buffer dump: {} bytes\n", sha_buf.len());
             for chunk in sha_buf.chunks(8) {

@@ -333,7 +333,7 @@ impl EXInterface {
 impl MmioDevice for EXInterface {
     type Width = u32;
 
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             0x00..=0x10 => self.channels[0].read(off)?,
             0x14..=0x24 => self.channels[1].read(off - 0x14)?,
@@ -344,7 +344,7 @@ impl MmioDevice for EXInterface {
         Ok(BusPacket::Word(val))
     }
 
-    fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, _access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x00..=0x10 => self.write_channel(0, off, val)?,
             0x14..=0x24 => self.write_channel(1, off - 0x14, val)?,

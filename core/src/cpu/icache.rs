@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::Cpu;
+use crate::bus::prim::Requester;
 
 const LINE_SIZE: usize = 32; // to match hw
 const LINE_COUNT: usize = 4096; // 512 = 16KiB, 1024 = 32KiB, etc.... real arm926ej-s has between 4 - 128k. bigger is better, right?
@@ -176,8 +177,8 @@ impl Cpu {
         if !enabled || !translation.cacheable || memory.is_none() {
             let mut bytes = [0; N];
             match N {
-                2 => bytes.copy_from_slice(&bus.read16(paddr)?.to_be_bytes()),
-                4 => bytes.copy_from_slice(&bus.read32(paddr)?.to_be_bytes()),
+                2 => bytes.copy_from_slice(&bus.read16(Requester::Arm, paddr)?.to_be_bytes()),
+                4 => bytes.copy_from_slice(&bus.read32(Requester::Arm, paddr)?.to_be_bytes()),
                 _ => unreachable!(),
             }
             return Ok(bytes);

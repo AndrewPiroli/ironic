@@ -77,11 +77,23 @@ impl Default for ClockInterface {
 
 
 /// Various bus control registers (?)
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct BusCtrlInterface {
     pub srnprot: u32,
     pub ahbprot: u32,
     pub aipprot: u32,
+}
+
+impl Default for BusCtrlInterface {
+    fn default() -> Self {
+        Self {
+            srnprot: 0,
+            // All AHB masters are enabled during the boot stage. IOS narrows
+            // these permissions later as part of its normal initialization.
+            ahbprot: u32::MAX,
+            aipprot: 0,
+        }
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -153,7 +165,7 @@ pub struct AhbInterface {
 }
 impl MmioDevice for AhbInterface {
     type Width = u32;
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             0x08 => 0,
             0x10 => self.unk_10,
@@ -165,7 +177,7 @@ impl MmioDevice for AhbInterface {
         };
         Ok(BusPacket::Word(val))
     }
-    fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, _access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x08 => {
                 self.unk_08 = val;
@@ -263,12 +275,46 @@ impl Hollywood {
             ppc_on: false,
         })
     }
+
+    fn ppc_user_can_access_acr(ahbprot: u32, off: usize) -> bool {
+        // These protection registers can only be accessed through a kernel
+        // transaction, even when general PPC ACR access is enabled.
+        if matches!(off, 0x060 | 0x064) {
+            return false;
+        }
+
+        (ahbprot & 1) != 0
+    }
+
+    fn check_register_access(&self, access: AccessContext, off: usize) -> anyhow::Result<()> {
+        if access.is_kernel() {
+            return Ok(());
+        }
+
+        let allowed = match access.requester {
+            Requester::Debugger => true,
+            Requester::Ppc => Self::ppc_user_can_access_acr(self.busctrl.ahbprot, off),
+            Requester::Arm => matches!(off,
+                0x008 | 0x00c |
+                0x038..=0x044 |
+                0x0dc..=0x0fc
+            ),
+            Requester::Soc => false,
+        };
+        if !allowed {
+            return Err(AccessError(format!(
+                "User {access:?} cannot access privileged Hollywood register {off:03x}"
+            )).into());
+        }
+        Ok(())
+    }
 }
 
 
 impl MmioDevice for Hollywood {
     type Width = u32;
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
+        self.check_register_access(access, off)?;
         let val = match off {
             0x000..=0x00c   => self.ipc.read_handler(off)?,
             0x010           => self.timer.timer,
@@ -323,7 +369,8 @@ impl MmioDevice for Hollywood {
         Ok(BusPacket::Word(val))
     }
 
-    fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+        self.check_register_access(access, off)?;
         match off {
             0x000..=0x00c => self.ipc.write_handler(off, val)?,
             0x010 => self.timer.timer = val,

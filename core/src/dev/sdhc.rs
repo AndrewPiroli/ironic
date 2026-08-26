@@ -663,7 +663,7 @@ impl SDInterface {
 impl MmioDevice for SDInterface {
     type Width = u32;
 
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         trace!(target: self.slot.log_target(), "MMIO read: 0x{off:x}");
         if off == SDRegisters::BufferDataPort.base_offset() {
             return self.read_buffer_data_port();
@@ -671,7 +671,7 @@ impl MmioDevice for SDInterface {
         Ok(BusPacket::Word(self.raw_read(off)))
     }
 
-    fn write(&mut self, off: usize, val: Self::Width) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, _access: AccessContext, off: usize, val: Self::Width) -> anyhow::Result<Option<BusTask>> {
         debug!(target: self.slot.log_target(), "MMIO write: 0x{off:x} = 0x{val:x}");
         let old = self.raw_read(off);
         let regs = SDRegisters::get_affected_registers(off, old, val);
@@ -715,11 +715,15 @@ impl Bus {
     }
     fn sdhc_schedule(&mut self, slot: SdhcSlot, task: SDHCTask) {
         self.tasks.push(Task {
+            access: AccessContext {
+                requester: Requester::Soc,
+                privilege: None
+            },
             kind: BusTask::SDHC(slot, task),
             target_cycle: self.cycle + IO_POLL_INTERVAL,
         });
     }
-    pub(crate) fn handle_task_sdhc(&mut self, slot: SdhcSlot, task: SDHCTask) {
+    pub(crate) fn handle_task_sdhc(&mut self, _access: AccessContext, slot: SdhcSlot, task: SDHCTask) {
         let irq = slot.irq();
         let log = slot.log_target();
         match task {
@@ -748,10 +752,10 @@ impl Bus {
                     match dir {
                         TxDir::Read => {
                             self.sdhc(slot).device.read_data(&mut buf).unwrap();
-                            self.dma_write(current_addr, &buf).unwrap();
+                            self.dma_write(Requester::Soc, current_addr, &buf).unwrap();
                         },
                         TxDir::Write => {
-                            self.dma_read(current_addr, &mut buf).unwrap();
+                            self.dma_read(Requester::Soc, current_addr, &mut buf).unwrap();
                             self.sdhc(slot).device.write_data(&buf).unwrap();
                         },
                     }

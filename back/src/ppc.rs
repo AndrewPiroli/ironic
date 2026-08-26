@@ -4,6 +4,7 @@
 //! want that. 
 
 use ironic_core::bus::*;
+use ironic_core::bus::prim::Requester;
 use ironic_core::dev::hlwd::irq::*;
 use crate::back::*;
 
@@ -405,7 +406,7 @@ impl PpcBackend {
     /// Read from physical memory.
     pub fn handle_read(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
         debug!(target: "PPC", "read {:x} bytes at {:08x}", req.len, req.addr);
-        self.bus.read().dma_read(req.addr,
+        self.bus.read().dma_read(Requester::Ppc, req.addr,
             &mut self.obuf[0..req.len as usize])?;
         client.write_all(&self.obuf[0..req.len as usize])?;
         Ok(())
@@ -415,7 +416,7 @@ impl PpcBackend {
     /// Read from physical memory.
     pub fn handle_read8(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
         debug!(target: "PPC", "read8 at {:08x}", req.addr);
-        self.obuf[0] = self.bus.read().read8(req.addr)?;
+        self.obuf[0] = self.bus.read().read8(Requester::Ppc, req.addr)?;
         client.write_all(&self.obuf[0..1])?;
         Ok(())
     }
@@ -423,7 +424,7 @@ impl PpcBackend {
     /// Read from physical memory.
     pub fn handle_read16(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
         debug!(target: "PPC", "read16 at {:08x}", req.addr);
-        let tmpval = self.bus.read().read16(req.addr)?;
+        let tmpval = self.bus.read().read16(Requester::Ppc, req.addr)?;
         self.obuf[0] = ((tmpval & 0xff00) >> 8) as u8;
         self.obuf[1] = (tmpval & 0x00ff) as u8;
         client.write_all(&self.obuf[0..2])?;
@@ -432,7 +433,7 @@ impl PpcBackend {
 
     /// Read from physical memory.
     pub fn handle_read32(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
-        let tmpval = self.bus.read().read32(req.addr)?;
+        let tmpval = self.bus.read().read32(Requester::Ppc, req.addr)?;
         debug!(target: "PPC", "read32 at {:08x}, val={:08x}", req.addr, tmpval);
         self.obuf[0] = ((tmpval & 0xff000000) >> 24) as u8;
         self.obuf[1] = ((tmpval & 0x00ff0000) >> 16) as u8;
@@ -446,7 +447,7 @@ impl PpcBackend {
     pub fn handle_write(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
         debug!(target: "PPC", "write {:x} bytes at {:08x}", req.len, req.addr);
         let data = &self.ibuf[0xc..(0xc + req.len as usize)];
-        self.bus.write().dma_write(req.addr, data)?;
+        self.bus.write().dma_write(Requester::Ppc, req.addr, data)?;
         client.write_all(b"OK")?;
         Ok(())
     }
@@ -454,7 +455,7 @@ impl PpcBackend {
     /// Write to physical memory.
     pub fn handle_write8(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
         debug!(target: "PPC", "write8 at {:08x} with {:02x}", req.addr, self.ibuf[0xc]);
-        let _ = self.bus.write().write8(req.addr, self.ibuf[0xc])?;
+        self.bus.write().write8(Requester::Ppc, req.addr, self.ibuf[0xc])?;
         client.write_all("OK".as_bytes())?;
         Ok(())
     }
@@ -463,7 +464,7 @@ impl PpcBackend {
     pub fn handle_write16(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
         let val = u16::from_le_bytes(self.ibuf[0xc..0xe].try_into().unwrap());
         debug!(target: "PPC", "write16 at {:08x} with {:04x}", req.addr, val);
-        let _ = self.bus.write().write16(req.addr, val)?;
+        self.bus.write().write16(Requester::Ppc, req.addr, val)?;
         client.write_all("OK".as_bytes())?;
         Ok(())
     }
@@ -472,7 +473,7 @@ impl PpcBackend {
     pub fn handle_write32(&mut self, client: &mut UnixStream, req: SocketReq) -> anyhow::Result<()> {
         let val = u32::from_le_bytes(self.ibuf[0xc..0x10].try_into().unwrap());
         debug!(target: "PPC", "write32 at {:08x} with {:08x}", req.addr, val);
-        let _ = self.bus.write().write32(req.addr, val)?;
+        self.bus.write().write32(Requester::Ppc, req.addr, val)?;
         client.write_all("OK".as_bytes())?;
         Ok(())
     }
@@ -495,7 +496,7 @@ impl PpcBackend {
         use anyhow::bail;
         let mut bus = self.bus.write();
         let mut copy = vec![0u8; req.len as usize];
-        if let Err(e) = bus.dma_read(req.addr, &mut copy) {
+        if let Err(e) = bus.dma_read(Requester::Ppc, req.addr, &mut copy) {
             error!(target: "RTPATCH", "Failed initial read of {:x} for runtime patch. {e:?}", req.addr);
             client.write_all(&[0,0])?;
             bail!(e);
@@ -508,7 +509,7 @@ impl PpcBackend {
         let mut current = p.start;
         let mut buf = vec![0u8; p.old.len()];
         while current < (p.end - p.old.len() as u32) {
-            if let Err(a) = bus.dma_read(current, &mut buf) {
+            if let Err(a) = bus.dma_read(Requester::Ppc, current, &mut buf) {
                 error!(target: "RTPATCH", "Failed to read memory at {current:x} {a:?}. Found: {found}");
                 break;
             }

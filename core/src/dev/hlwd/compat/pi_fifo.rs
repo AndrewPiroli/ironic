@@ -16,10 +16,10 @@ pub struct ProcessorInterfaceFIFO;
 
 impl MmioDevice for ProcessorInterfaceFIFO {
     type Width = [u8; 32];
-    fn read(&self, _off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, _access: AccessContext, _off: usize) -> anyhow::Result<BusPacket> {
         bail!("FIFO is write-only");
     }
-    fn write(&mut self, _off: usize, val: [u8; 32]) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, _access: AccessContext, _off: usize, val: [u8; 32]) -> anyhow::Result<Option<BusTask>> {
         Ok(Some(BusTask::PiFifo(val)))
     }
 }
@@ -29,7 +29,7 @@ impl Bus {
     /// at the PI FIFO write pointer, then advance that pointer by 32B.
     pub fn handle_task_pi_fifo(&mut self, burst: [u8; 32]) -> anyhow::Result<()> {
         let wr_ptr = self.hlwd.pi.fifo_cur_write_ptr;
-        self.dma_write(wr_ptr, &burst)?;
+        self.dma_write(Requester::Soc, wr_ptr, &burst)?;
 
         let mut next_ptr = wr_ptr.wrapping_add(32);
         if next_ptr > self.hlwd.pi.fifo_base_end {

@@ -51,7 +51,7 @@ impl DdrInterface {
 
 impl MmioDevice for DdrInterface {
     type Width = u16;
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             0x28 => { bail!("DDR ahmflush read unimplemented"); },
             0x2a => self.ahmflush_ack,
@@ -61,7 +61,7 @@ impl MmioDevice for DdrInterface {
         };
         Ok(BusPacket::Half(val))
     }
-    fn write(&mut self, off: usize, val: u16) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, _access: AccessContext, off: usize, val: u16) -> anyhow::Result<Option<BusTask>> {
         match off {
             // Always immediately ACK some request
             0x28 => {

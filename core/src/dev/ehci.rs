@@ -39,7 +39,7 @@ impl EhcInterface {
 impl MmioDevice for EhcInterface {
     type Width = u32;
 
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             /*
              * The real intended value is 0x10, but it appears like this due
@@ -59,7 +59,7 @@ impl MmioDevice for EhcInterface {
         Ok(BusPacket::Word(val))
     }
 
-    fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, _access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x10 => {
                 if val & USBCMD_RESET != 0 {

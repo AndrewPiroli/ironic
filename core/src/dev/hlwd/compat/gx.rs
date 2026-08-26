@@ -38,41 +38,41 @@ pub struct GX {
 }
 
 impl MmioDeviceMultiWidth for GX {
-    fn read8(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read8(&self, access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         match off {
-            0x0000..=0x0fff => self.cp.read8(off),
+            0x0000..=0x0fff => self.cp.read8(access, off),
             _ => bail!("GX 8-bit read to undefined offset {off:x}"),
         }
     }
-    fn read16(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read16(&self, access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         match off {
-            0x0000..=0x0fff => self.cp.read16(off),
-            0x1000..=0x1fff => self.pe.read(off - 0x1000),
+            0x0000..=0x0fff => self.cp.read16(access, off),
+            0x1000..=0x1fff => self.pe.read(access, off - 0x1000),
             _ => bail!("GX 16-bit read to undefined offset {off:x}"),
         }
     }
-    fn read32(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read32(&self, access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         match off {
-            0x0000..=0x0fff => self.cp.read32(off),
+            0x0000..=0x0fff => self.cp.read32(access, off),
             _ => bail!("GX 32-bit read to undefined offset {off:x}"),
         }
     }
-    fn write8(&mut self, off: usize, val: u8) -> anyhow::Result<Option<BusTask>> {
+    fn write8(&mut self, access: AccessContext, off: usize, val: u8) -> anyhow::Result<Option<BusTask>> {
         match off {
-            0x0000..=0x0fff => self.cp.write8(off, val),
+            0x0000..=0x0fff => self.cp.write8(access, off, val),
             _ => bail!("GX 8-bit write {val:08x} to undefined offset {off:x}"),
         }
     }
-    fn write16(&mut self, off: usize, val: u16) -> anyhow::Result<Option<BusTask>> {
+    fn write16(&mut self, access: AccessContext, off: usize, val: u16) -> anyhow::Result<Option<BusTask>> {
         match off {
-            0x0000..=0x0fff => self.cp.write16(off, val),
-            0x1000..=0x1fff => self.pe.write(off - 0x1000, val),
+            0x0000..=0x0fff => self.cp.write16(access, off, val),
+            0x1000..=0x1fff => self.pe.write(access, off - 0x1000, val),
             _ => bail!("GX 16-bit write {val:08x} to undefined offset {off:x}"),
         }
     }
-    fn write32(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write32(&mut self, access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
-            0x0000..=0x0fff => self.cp.write32(off, val),
+            0x0000..=0x0fff => self.cp.write32(access, off, val),
             _ => bail!("GX 32-bit write {val:08x} to undefined offset {off:x}"),
         }
     }

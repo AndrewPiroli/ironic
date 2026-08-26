@@ -121,10 +121,10 @@ impl DigitalSignalProcessor {
  */
 
 impl MmioDeviceMultiWidth for DigitalSignalProcessor {
-    fn read8(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read8(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         bail!("DSP unsupported 8-bit read from offset {off:x}");
     }
-    fn read16(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read16(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             0x00 => self.mailbox_in_h,
             0x02 => self.mailbox_in_l,
@@ -160,7 +160,7 @@ impl MmioDeviceMultiWidth for DigitalSignalProcessor {
         };
         Ok(BusPacket::Half(val))
     }
-    fn read32(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read32(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val: u32 = match off {
             0x00 => (self.mailbox_in_h as u32) << 16 & self.mailbox_in_l as u32,
             0x04 => (self.mailbox_out_h as u32) << 16 & self.mailbox_out_l as u32,
@@ -172,10 +172,10 @@ impl MmioDeviceMultiWidth for DigitalSignalProcessor {
         Ok(BusPacket::Word(val))
     }
 
-    fn write8(&mut self, off: usize, val: u8) -> anyhow::Result<Option<BusTask>> {
+    fn write8(&mut self, _access: AccessContext, off: usize, val: u8) -> anyhow::Result<Option<BusTask>> {
         bail!("DSP unsupported 8-bit write {val:02x} to offset {off:x}");
     }
-    fn write16(&mut self, off: usize, val: u16) -> anyhow::Result<Option<BusTask>> {
+    fn write16(&mut self, _access: AccessContext, off: usize, val: u16) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x00 => {
                 self.mailbox_in_h = val;
@@ -274,7 +274,7 @@ impl MmioDeviceMultiWidth for DigitalSignalProcessor {
         }
         Ok(None)
     }
-    fn write32(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write32(&mut self, _access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x00 => {
                 self.mailbox_in_h = ((val & 0xffff0000) >> 16) as u16;

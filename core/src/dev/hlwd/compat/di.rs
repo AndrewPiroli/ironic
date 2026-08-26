@@ -44,7 +44,7 @@ impl DriveInterface {
 
 impl MmioDevice for DriveInterface {
     type Width = u32;
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         let val = match off {
             0x00 => self.disr,
             0x04 => self.dicvr,
@@ -58,7 +58,7 @@ impl MmioDevice for DriveInterface {
         };
         Ok(BusPacket::Word(val))
     }
-    fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, _access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x00 => {
                 const DISR_W1C_MASK: u32 = 0x0000_0054;

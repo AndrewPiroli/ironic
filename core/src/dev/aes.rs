@@ -71,7 +71,7 @@ impl AesInterface {
 impl MmioDevice for AesInterface {
     type Width = u32;
 
-    fn read(&self, off: usize) -> anyhow::Result<BusPacket> {
+    fn read(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
         match off {
             //0x00 => BusPacket::Word(self.ctrl),
             0x00 => Ok(BusPacket::Word(0)),
@@ -79,7 +79,7 @@ impl MmioDevice for AesInterface {
         }
     }
 
-    fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
+    fn write(&mut self, _access: AccessContext, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x00 => {
                 self.ctrl = val;
@@ -130,7 +130,7 @@ impl Bus {
             warn!(target: "AES", "Unaligned AES src address {:08x}; DMA will read from next 16-byte boundary", src);
         }
         src = (src + 0x0f) & !0x0f;
-        self.dma_read(src, &mut aes_inbuf)?;
+        self.dma_read(Requester::Soc, src, &mut aes_inbuf)?;
         if log_enabled!(target: "AES", log::Level::Trace) {
             let mut msg = format!("AES DMA Buffer dump: {} bytes\n", aes_inbuf.len());
             for chunk in aes_inbuf.chunks(8) {
@@ -171,12 +171,12 @@ impl Bus {
                 },
             };
 
-            self.dma_write(self.aes.dst, &aes_outbuf)?;
+            self.dma_write(Requester::Soc, self.aes.dst, &aes_outbuf)?;
 
             // Update IV buffer with the last 16 bytes of data
             self.aes.iv_buffer.copy_from_slice(&aes_inbuf[(cmd.len - 0x10)..]);
         } else {
-            self.dma_write(self.aes.dst, &aes_inbuf)?;
+            self.dma_write(Requester::Soc, self.aes.dst, &aes_inbuf)?;
         }
 
         // Update the source/destination registers exposed over MMIO
