@@ -56,6 +56,8 @@ pub struct VideoInterface {
     pub dpv: u16,
     /// current horizontal Position (of raster beam) (?)
     pub dph: u16,
+    /// Start of the frame currently being scheduled by the VI thread.
+    beam_epoch: Option<Instant>,
     /// Display Interrupt 0
     pub di0: u32,
     /// Display Interrupt 1
@@ -143,15 +145,16 @@ impl VideoInterface {
     pub fn spawn_irq_thread(bus: Arc<RwLock<Bus>>) -> std::io::Result<JoinHandle<()>> {
         Builder::new().name("ViThread".to_owned()).spawn(move || {
             loop {
+                let frame_start = Instant::now();
                 let (frame_duration, frame_lines, mut interrupts) = {
-                    let bus = bus.read();
+                    let mut bus = bus.write();
+                    bus.hlwd.vi.beam_epoch = Some(frame_start);
                     let frame_duration = bus.hlwd.vi.frame_duration();
                     let frame_lines = bus.hlwd.vi.frame_lines();
                     let interrupts = bus.hlwd.vi.display_interrupts();
                     (frame_duration, frame_lines, interrupts)
                 };
 
-                let frame_start = Instant::now();
                 interrupts.sort_by_key(|di| di.frame_offset(frame_duration, frame_lines));
 
                 for di in interrupts {
@@ -186,6 +189,27 @@ impl VideoInterface {
             1 => 625,
             _ => 525,
         }
+    }
+
+    fn beam_position(&self) -> (u16, u16) {
+        let Some(frame_start) = self.beam_epoch else {
+            return (1, 1);
+        };
+
+        let frame_duration = self.frame_duration();
+        let frame_lines = self.frame_lines() as u128;
+        let dots_per_line = 1024_u128;
+        let frame_dots = frame_lines * dots_per_line;
+        let elapsed_nanos = Instant::now()
+            .saturating_duration_since(frame_start)
+            .as_nanos()
+            % frame_duration.as_nanos();
+        let position = elapsed_nanos * frame_dots / frame_duration.as_nanos();
+
+        // Both beam-position registers are one-based on the real VI.
+        let vertical = 1 + position / dots_per_line;
+        let horizontal = 1 + position % dots_per_line;
+        (vertical as u16, horizontal as u16)
     }
 
     fn display_interrupts(&self) -> Vec<DisplayInterrupt> {
@@ -241,6 +265,11 @@ impl MmioDeviceMultiWidth for VideoInterface {
     }
 
     fn read16(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
+        let beam_position = if matches!(off, 0x2c | 0x2e) {
+            Some(self.beam_position())
+        } else {
+            None
+        };
         let val = match off {
             0x00 => self.vtr,
             0x02 => self.dcr,
@@ -264,8 +293,8 @@ impl MmioDeviceMultiWidth for VideoInterface {
             0x26 => (self.bfbl & 0xfff) as u16,
             0x28 => (self.bfbr >> 16) as u16,
             0x2a => (self.bfbr & 0xffff) as u16,
-            0x2c => self.dpv,
-            0x2e => self.dph,
+            0x2c => beam_position.unwrap().0,
+            0x2e => beam_position.unwrap().1,
             0x30 => (self.di0 >> 16) as u16,
             0x32 => (self.di0 & 0xffff) as u16,
             0x34 => (self.di1 >> 16) as u16,
@@ -311,6 +340,12 @@ impl MmioDeviceMultiWidth for VideoInterface {
         Ok(BusPacket::Half(val))
     }
     fn read32(&self, _access: AccessContext, off: usize) -> anyhow::Result<BusPacket> {
+        let beam_position = if off == 0x2c {
+            Some(self.beam_position())
+        }
+        else {
+            None
+        };
         let val = match off {
             0x00 => ((self.vtr as u32) << 16) | (self.dcr as u32),
             0x04 => self.htr0,
@@ -323,7 +358,10 @@ impl MmioDeviceMultiWidth for VideoInterface {
             0x20 => self.tfbr,
             0x24 => self.bfbl,
             0x28 => self.bfbr,
-            0x2c => ((self.dpv as u32) << 16) | (self.dph as u32),
+            0x2c => {
+                let (vertical, horizontal) = beam_position.unwrap();
+                ((vertical as u32) << 16) | horizontal as u32
+            },
             0x30 => self.di0,
             0x34 => self.di1,
             0x38 => self.di2,
