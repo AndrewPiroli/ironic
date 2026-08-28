@@ -235,7 +235,7 @@ pub struct Hollywood {
     pub ppc_on: bool,
 }
 impl Hollywood {
-    pub fn new(otp: &Path, seeprom: &Path) -> anyhow::Result<Self> {
+    pub fn new(otp: &Path, seeprom: &Path, dvd: Option<&Path>) -> anyhow::Result<Self> {
         // TODO: Where do the initial values for these registers matter?
         Ok(Hollywood {
             task: None,
@@ -253,7 +253,7 @@ impl Hollywood {
             gx: compat::gx::GX::default(),
             pi_fifo: compat::pi_fifo::ProcessorInterfaceFIFO::default(),
             dsp: compat::dsp::DigitalSignalProcessor::default(),
-            di: compat::di::DriveInterface::default(),
+            di: compat::di::DriveInterface::new(dvd),
             exi: compat::exi::EXInterface::new(),
             mi: compat::mem::MemInterface::new(),
             si: compat::si::SerialInterface::default(),

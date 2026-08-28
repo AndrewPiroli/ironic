@@ -32,6 +32,9 @@ pub enum BusTask {
 
     /// DI command finished
     Di { error: bool, dma: Option<Vec<u8>> },
+    /// DI's DISR was written to (status W1C and/or mask bits) - recompute
+    /// whether its PI line should still be asserted.
+    DiIrqSync,
 }
 
 /// An entry kept by the [Bus], representing some task to-be-completed.

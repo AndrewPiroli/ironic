@@ -73,7 +73,7 @@ pub struct Bus {
     pub cycle: usize,
 }
 impl Bus {
-    pub fn new(boot0: &Path, nand: &Path, otp: &Path, seeprom: &Path, sd: Option<&Path>) -> anyhow::Result<Self> {
+    pub fn new(boot0: &Path, nand: &Path, otp: &Path, seeprom: &Path, sd: Option<&Path>, dvd: Option<&Path>) -> anyhow::Result<Self> {
         Ok(Bus {
             cache_control: Default::default(),
             mrom: Boot0::new(boot0),
@@ -82,7 +82,7 @@ impl Bus {
             mem1: BigEndianMemory::new(0x0180_0000),
             mem2: BigEndianMemory::new(0x0400_0000),
 
-            hlwd: Hollywood::new(otp, seeprom)?,
+            hlwd: Hollywood::new(otp, seeprom, dvd)?,
             nand: NandInterface::new(nand)?,
             aes: AesInterface::new(),
             sha: ShaInterface::new(),
