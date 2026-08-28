@@ -31,7 +31,7 @@ pub enum BusTask {
     PiFifo([u8; 32]),
 
     /// DI command finished
-    Di { error: bool },
+    Di { error: bool, dma: Option<Vec<u8>> },
 }
 
 /// An entry kept by the [Bus], representing some task to-be-completed.
