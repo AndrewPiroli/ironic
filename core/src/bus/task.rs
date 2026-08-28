@@ -29,6 +29,9 @@ pub enum BusTask {
 
     /// A completed 32-byte burst from the PI FIFO.
     PiFifo([u8; 32]),
+
+    /// DI command finished
+    Di { error: bool },
 }
 
 /// An entry kept by the [Bus], representing some task to-be-completed.
