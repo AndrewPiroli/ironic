@@ -4,6 +4,7 @@ pyronic/__pycache__/
 *.pyc
 *.bin
 *.bin.*
+dvd.iso
 *.img
 *.sym
 **/target
