@@ -63,6 +63,9 @@ impl IrqBits {
     pub fn hollywood_irqs(&self) -> bool    { (self.0 & 0x0000_4000) != 0 }
 }
 
+/// See https://github.com/Wii-Linux/NPLL/blob/50102006a18287ecf22abba48757e88eb4a57191/include/npll/soc.h#L142
+const PI_CHIPID_FLIPPER_REVC: u32 = 0x2465_00b1;
+
 /// Legacy Processor Interface
 /// TODO: need functionality for reset somehow
 /// TODO: when the GX FIFO is implemented, those registers would need to be connected to it
@@ -141,7 +144,7 @@ impl MmioDevice for ProcessorInterface {
             0x20 => self.unk_20,
             0x24 => self.reset,
             0x28 => self.unk_28,
-            0x2c => self.unk_2c,
+            0x2c => PI_CHIPID_FLIPPER_REVC,
             _ => { bail!("PI read from undefined offset {off:x}"); },
         };
         Ok(BusPacket::Word(val))
