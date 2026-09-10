@@ -119,12 +119,13 @@ class IPCClient(object):
         res = self.guest_ipc(msg)
         return unpack(">i", res.read()[4:8])[0]
 
-    def __ioctlv_parse(self, fmt, args):
+    def __ioctlv_parse(self, fmt, args, quiet=True):
         """ Parse some ioctlv arguments into a set of memory handles """
         handles = []
 
         for (c, v) in zip(fmt, args):
-            print("{} {}".format(c, v))
+            if not quiet:
+                print("{} {}".format(c, v))
             if c == 'b': 
                 handles.append(self.alloc_buf(pack(">B", v & 0xff)))
             elif c == 'h': 
@@ -140,6 +141,7 @@ class IPCClient(object):
         return handles
 
     def IOSIoctlv(self, fd, cmd, fmt, *args, **kwargs):
+        quiet = kwargs.pop("quiet", True)
         iargs = []
         oargs = []
         arglist = list(args)
@@ -154,12 +156,14 @@ class IPCClient(object):
         for c in ifmt: iargs.append(arglist.pop(0))
         for c in ofmt: oargs.append(arglist.pop(0))
 
-        print(ifmt, ofmt)
-        print(iargs, oargs)
+        if not quiet:
+            print(ifmt, ofmt)
+            print(iargs, oargs)
 
-        ibufs = self.__ioctlv_parse(ifmt, iargs)
-        obufs = self.__ioctlv_parse(ofmt, oargs)
-        print(ibufs, obufs)
+        ibufs = self.__ioctlv_parse(ifmt, iargs, quiet=quiet)
+        obufs = self.__ioctlv_parse(ofmt, oargs, quiet=quiet)
+        if not quiet:
+            print(ibufs, obufs)
 
         ioctlvbuf = bytearray()
         for handle in ibufs:
@@ -167,7 +171,8 @@ class IPCClient(object):
         for handle in obufs:
             ioctlvbuf += pack(">LL", handle.paddr, handle.size)
         buf = self.alloc_buf(ioctlvbuf)
-        print(hexdump(buf.read()))
+        if not quiet:
+            print(hexdump(buf.read()))
 
         msg = IPCMsg(self.IPC_IOCTLV, fd=fd, 
                 args=[cmd, len(ibufs), len(obufs), buf.paddr])
