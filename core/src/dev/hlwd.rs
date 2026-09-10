@@ -267,7 +267,7 @@ impl Hollywood {
             reset_ahb: 0x0000_ffff,
             resets: 0x0000_0008,
             clocks: 0,
-            compat: 0,
+            compat: 0xffff_ffff,
             spare0: 0,
             spare1: 0,
             io_str_ctrl0: 0,
@@ -405,7 +405,11 @@ impl MmioDevice for Hollywood {
                 self.task = self.gpio.arm.write_handler(off - 0xdc, val)?;
             },
             0x100..=0x13c => self.arb.write_handler(off - 0x100, val)?,
-            0x180 => self.compat = val,
+            0x180 => {
+                info!(target: "HLWD", "compat={val:08x}");
+                self.di.compat_hi_address = (val & 0x0000_1000) == 0x0000_1000;
+                self.compat = val;
+            },
             0x184 => {
                 info!(target: "HLWD", "reset_ahb={val:08x}");
                 self.reset_ahb = val;

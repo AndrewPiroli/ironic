@@ -91,6 +91,9 @@ pub struct DriveInterface {
     genuine: bool,
     /// Status/error word to report back on the next `DI_CMD_GET_STATUS`.
     last_error: u32,
+
+    /// HW_COMPAT bit12 permits high addresses in DIMAR
+    pub compat_hi_address: bool,
 }
 impl DriveInterface {
     pub fn new(dvd: Option<&Path>) -> Self {
@@ -166,9 +169,8 @@ impl DriveInterface {
         let dma: bool = self.dicr & 0x0000_0002 == 0x0000_0002;
         let write: bool = self.dicr & 0x0000_0004 == 0x0000_0004;
         let cmd = self.dicmdbuf;
-        let dimar = self.dimar & 0x03ffffe0; // FIXME: YAGCD says this is the DIMAR mask, but how
-                                             // would MEM2 work then?  Must've been bumped up
-                                             // somewhat for Hollywood, but by how far?
+        let mask = if self.compat_hi_address {0xffff_ffe0} else {0x03ff_ffe0};
+        let dimar = self.dimar & mask;
 
         if dma && write {
             debug!(target: "DI", "DMA command from {:x}, {}B, [ {:x}, {:x}, {:x} ]", dimar, self.dilength, cmd[0], cmd[1], cmd[2]);
@@ -265,7 +267,9 @@ impl DriveInterface {
 impl Bus {
     pub fn handle_task_di(&mut self, error: bool, dma: Option<Vec<u8>>) -> anyhow::Result<()> {
         if let Some(data) = dma {
-            let addr = self.hlwd.di.dimar & 0x03ffffe0; // FIXME: see DIMAR comment above
+            let mask = if self.hlwd.di.compat_hi_address {0xffff_ffe0} else {0x03ff_ffe0};
+            let addr = self.hlwd.di.dimar & mask;
+
             self.dma_write(Requester::Soc, addr, &data)?;
             self.hlwd.di.dilength = 0; // fully transferred, no residual
         }
