@@ -48,6 +48,10 @@ pub(super) struct Card {
     selected: bool,
     /// Cursor into the backing memory for the transfer in progress.
     rw_index: AtomicUsize,
+    /// Redirect Reads to SD Status Buffer
+    reading_status: bool,
+    /// Buffer for SD Status Reads
+    sd_status_buf: [u8; 64],
 }
 
 impl Card {
@@ -82,6 +86,8 @@ impl Card {
             capacity,
             selected: Default::default(),
             rw_index: Default::default(),
+            reading_status: false,
+            sd_status_buf: [0;64],
         }
     }
 }
@@ -105,6 +111,8 @@ impl Card {
             (false, 18) => (Some(self.cmd18(argument)), Some(TxDir::Read)),
             (false, 25) => (Some(self.cmd25(argument)), Some(TxDir::Write)),
             (true, 6)   => (Some(self.acmd6(argument)), None),
+            (false, 6)  => (Some(self.cmd6(argument)), Some(TxDir::Read)),
+            (false, 13) => (Some(self.cmd13(argument)), None),
             (_, 55) => {
                 self.acmd = true;
                 (Some(Response::Regular(0)), None)
@@ -119,7 +127,15 @@ impl Card {
 
     pub(super) fn read_data(&self, buf: &mut [u8]) -> anyhow::Result<()> {
         let index = self.rw_index.load(Ordering::Relaxed);
-        self.backing_mem.lock().read_buf(index, buf)?;
+        if self.reading_status {
+            if index + buf.len() >= self.sd_status_buf.len() {
+                anyhow::bail!("SD Status Buffer read out of range");
+            }
+            buf.copy_from_slice(&self.sd_status_buf[index..index+buf.len()]);
+        }
+        else {
+            self.backing_mem.lock().read_buf(index, buf)?;
+        }
         self.rw_index.store(index + buf.len(), Ordering::Relaxed);
         Ok(())
     }
@@ -136,6 +152,7 @@ impl Card {
             warn!(target: LOG, "card transfer aborted at byte offset {}",
                 self.rw_index.load(Ordering::Relaxed));
         }
+        self.reading_status = false;
         self.state = CardState::Trans;
     }
     fn cmd8(&mut self, argument: u32) -> Option<Response> {
@@ -231,6 +248,17 @@ impl Card {
     }
     fn acmd6(&mut self, _argument: u32) -> Response {
         // Set bus width command, we aren't emulating individual SD bus cycles, so this is just a stub
+        Response::Regular((self.state.bits_for_card_status() as u32) << 9)
+    }
+    fn cmd6(&mut self, _argument: u32) -> Response {
+        self.sd_status_buf = [0;64];
+        self.reading_status = true;
+        self.state = CardState::Data;
+        self.rw_index.store(0, std::sync::atomic::Ordering::Relaxed);
+        let response = (self.state.bits_for_card_status() as u32) << 9;
+        Response::Regular(response)
+    }
+    fn cmd13(&mut self, _argument: u32) -> Response {
         Response::Regular((self.state.bits_for_card_status() as u32) << 9)
     }
 }

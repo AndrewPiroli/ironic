@@ -601,6 +601,7 @@ impl SDInterface {
     fn buffer_ready(&mut self, dir: TxDir) -> bool {
         let blocks_remaining = self.blocks_remaining();
         if blocks_remaining == 0 {
+            warn!(target: self.slot.log_target(), "Tried to send a buffer ready but blocks_remaining == 0");
             return false;
         }
         self.block_bytes_left.store(BLOCK_LEN as u32, Ordering::Relaxed);
@@ -726,11 +727,9 @@ impl Bus {
                 self.hlwd.irq.assert(irq);
             },
             SDHCTask::SendBufferReady(dir) => {
-                if !self.sdhc(slot).buffer_ready(dir) {
-                    unimplemented!("SDHC could not open the next {dir:?} block");
-                }
+                let assert_irq = self.sdhc(slot).buffer_ready(dir);
                 self.sdhc_schedule(slot, SDHCTask::IOPoll);
-                self.hlwd.irq.assert(irq);
+                if assert_irq { self.hlwd.irq.assert(irq); }
             },
             SDHCTask::DoDma(dir) => { // carefulling in progress
                 let sysaddr = self.sdhc(slot).raw_read(SDRegisters::SystemAddress.base_offset());
