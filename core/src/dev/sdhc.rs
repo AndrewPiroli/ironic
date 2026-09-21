@@ -308,8 +308,7 @@ impl SDInterface {
             }
             SDRegisters::NormalIntStatus => {
                 const RW1C_MASK: u32 = 0x1ff; // mask of the bits that are rw1c, all others are reserved or ROC.
-                let clearbits = (old & RW1C_MASK) ^ (new & RW1C_MASK);
-                let int_new = (old & !RW1C_MASK) | clearbits;
+                let int_new = old & !(new & RW1C_MASK);
                 debug!(target: self.slot.log_target(), "normalintstatus {old:b} {int_new:b}");
                 self.setreg(reg, int_new);
                 // The host driver will write here to acknowledge a CMD complete
@@ -327,8 +326,7 @@ impl SDInterface {
             },
             SDRegisters::ErrorIntStatus => {
                 const RW1C_MASK: u32 = 0xf1ff; // mask of the bits that are rw1c, all others are reserved or ROC.
-                let clearbits = (old & RW1C_MASK) ^ (new & RW1C_MASK);
-                let new = (old & !RW1C_MASK) | clearbits;
+                let new = old & !(new & RW1C_MASK);
                 self.setreg(reg, new);
             },
             SDRegisters::NormalIntSignalEnable | SDRegisters::NormalIntStatusEnable => {
@@ -451,40 +449,47 @@ impl SDInterface {
         let new = old | ((val << val_shift) & mask);
         self.raw_write(reg.base_offset() & 0xffff_fffc, new);
     }
-    fn ck_int_enabled(&self, int: u32) -> bool {
-        let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
+    fn status_enabled(&self, int: u32) -> bool {
         let status = self.raw_read(SDRegisters::NormalIntStatusEnable.base_offset());
-        signal & int != 0 && status & int != 0
+        status & int != 0
+    }
+    fn signal_enabled(&self, int: u32) -> bool {
+        let signal = self.raw_read(SDRegisters::NormalIntSignalEnable.base_offset());
+        signal & int != 0
     }
     fn do_pending_ints(&mut self) -> bool {
         if self.pending_interrupt_flags == 0 {
             return false;
         }
         let mut nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
-        let mut found = false;
+        let mut latched = false;
+        let mut assert = false;
         for i in 0..32 {
             let int = self.pending_interrupt_flags & (1 << i);
-            if self.ck_int_enabled(int) {
-                found = true;
+            if int != 0 && self.status_enabled(int) {
+                latched = true;
                 self.pending_interrupt_flags &= !int;
                 nisr |= int;
+                if self.signal_enabled(int) {
+                    assert = true;
+                }
             }
         }
-        if found {
+        if latched {
             let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
             self.setreg(SDRegisters::NormalIntStatus, nisr);
             self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
         }
-        return found;
+        return assert;
     }
     // returns true if the interrupt should be raised now, false if it's masked and will be raised later
     fn raise_int(&mut self, int: u32) -> bool {
-        if self.ck_int_enabled(int) {
+        if self.status_enabled(int) {
             let nisr = self.raw_read(SDRegisters::NormalIntStatus.base_offset());
             let sisr = self.raw_read(SDRegisters::SlotIntStatus.base_offset()) & 0xffff;
             self.setreg(SDRegisters::NormalIntStatus, nisr | int);
             self.setreg(SDRegisters::SlotIntStatus, sisr | 0x1); // slot 1
-            true
+            self.signal_enabled(int)
         }
         else {
             self.pending_interrupt_flags |= int;
@@ -739,7 +744,7 @@ impl Bus {
                 debug!(target: log, "Starting DMA {dir:?} Tx at sysaddr: {sysaddr:x}");
                 let block_len = BLOCK_LEN as u32;
                 let mut buf = vec![0u8; BLOCK_LEN];
-                while current_addr + block_len < stop_addr && block_count > 0 {
+                while current_addr + block_len <= stop_addr && block_count > 0 {
                     match dir {
                         TxDir::Read => {
                             self.sdhc(slot).device.read_data(&mut buf).unwrap();
