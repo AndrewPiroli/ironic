@@ -113,6 +113,8 @@ impl Card {
             (true, 6)   => (Some(self.acmd6(argument)), None),
             (false, 6)  => (Some(self.cmd6(argument)), Some(TxDir::Read)),
             (false, 13) => (Some(self.cmd13(argument)), None),
+            (false, 17) => (Some(self.cmd17(argument)), Some(TxDir::Read)),
+            (false, 24) => (Some(self.cmd24(argument)), Some(TxDir::Write)),
             (_, 55) => {
                 self.acmd = true;
                 (Some(Response::Regular(0)), None)
@@ -259,6 +261,20 @@ impl Card {
         Response::Regular(response)
     }
     fn cmd13(&mut self, _argument: u32) -> Response {
+        Response::Regular((self.state.bits_for_card_status() as u32) << 9)
+    }
+    fn cmd17(&mut self, argument: u32) -> Response {
+        let byte_offset = self.argument_to_byte_offset(argument);
+        log::debug!(target: LOG, "Issued single block transfer(R): byte offset {} (arg=0x{:x}, {:?})", byte_offset, argument, self.capacity);
+        self.state = CardState::Data;
+        self.rw_index.store(byte_offset, Ordering::Relaxed);
+        Response::Regular((self.state.bits_for_card_status() as u32) << 9)
+    }
+    fn cmd24(&mut self, argument: u32) -> Response {
+        let byte_offset = self.argument_to_byte_offset(argument);
+        log::debug!(target: LOG, "Issued single block transfer(W): byte offset {} (arg=0x{:x}, {:?})", byte_offset, argument, self.capacity);
+        self.state = CardState::Rcv;
+        self.rw_index.store(byte_offset, Ordering::Relaxed);
         Response::Regular((self.state.bits_for_card_status() as u32) << 9)
     }
 }
