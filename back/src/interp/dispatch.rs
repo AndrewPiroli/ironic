@@ -86,6 +86,7 @@ impl ArmFn {
             StrbReg     => ArmFn(afn!(arm::loadstore::strb_reg)),
 
             Ldmib       => ArmFn(afn!(arm::loadstore::ldmib)),
+            Ldmda       => ArmFn(afn!(arm::loadstore::ldmda)),
             Ldm         => ArmFn(afn!(arm::loadstore::ldmia)),
             LdmRegUser  => ArmFn(afn!(arm::loadstore::ldm_user)),
 

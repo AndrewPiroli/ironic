@@ -473,6 +473,48 @@ pub fn ldmia(cpu: &mut Cpu, op: LsMultiBits) -> DispatchRes {
     }
 }
 
+pub fn ldmda(cpu: &mut Cpu, op: LsMultiBits) -> DispatchRes {
+    assert_ne!(op.rn(), 15);
+    let reglist = op.register_list();
+    let mut addr = cpu.reg[op.rn()] - (reglist.count_ones() * 4) + 4;
+    let wb_addr = addr - (reglist.count_ones() * 4);
+
+    let mut branch = false;
+    for i in 0..16 {
+        if (reglist & (1 << i)) != 0 {
+            if i == 15 {
+                let temp_addr = match cpu.read32(addr) {
+                    Ok(val) => val,
+                    Err(reason) => {
+                        return DispatchRes::FatalErr(reason);
+                    }
+                };
+                cpu.reg.cpsr.set_thumb(temp_addr & 1 != 0);
+                cpu.write_exec_pc(temp_addr & 0xfffffffe);
+                branch = true;
+                addr += 4;
+            } else {
+                let temp_addr = match cpu.read32(addr) {
+                    Ok(val) => val,
+                    Err(reason) => {
+                        return DispatchRes::FatalErr(reason);
+                    }
+                };
+                cpu.reg[i as u32] = temp_addr;
+                addr += 4;
+            }
+        }
+    }
+    if op.w() {
+        cpu.reg[op.rn()] = wb_addr;
+    }
+
+    if branch {
+        DispatchRes::RetireBranch
+    } else {
+        DispatchRes::RetireOk
+    }
+}
 
 
 pub fn stmdb(cpu: &mut Cpu, op: LsMultiBits) -> DispatchRes {
