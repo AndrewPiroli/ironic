@@ -137,6 +137,26 @@ impl Bus {
     /// Dispatch a DMA write to some memory device.
     fn do_dma_write(&mut self, addr: u32, buf: &[u8]) -> anyhow::Result<()> {
         use MemDevice::*;
+        if self.resolve_dma_sram(addr).is_some() {
+            let mut addr = addr;
+            let mut buf = buf;
+            while !buf.is_empty() {
+                let Some((dev, off, available)) = self.resolve_dma_sram(addr) else {
+                    bail!("DMA write crossed the end of the SRAM aperture at {addr:08x}");
+                };
+                let len = available.min(buf.len());
+                match dev {
+                    Sram0 => self.sram0.write_buf(off, &buf[..len])?,
+                    Sram1 => self.sram1.write_buf(off, &buf[..len])?,
+                    _ => unreachable!(),
+                }
+                addr = addr.checked_add(len as u32)
+                    .ok_or_else(|| anyhow::anyhow!("DMA write address overflow"))?;
+                buf = &buf[len..];
+            }
+            return Ok(());
+        }
+
         let handle = match self.decode_phys_addr(addr){
             Some(val) => val,
             None => {
@@ -166,6 +186,26 @@ impl Bus {
     /// Dispatch a DMA read to some memory device.
     fn do_dma_read(&self, addr: u32, buf: &mut [u8]) -> anyhow::Result<()> {
         use MemDevice::*;
+        if self.resolve_dma_sram(addr).is_some() {
+            let mut addr = addr;
+            let mut buf = buf;
+            while !buf.is_empty() {
+                let Some((dev, off, available)) = self.resolve_dma_sram(addr) else {
+                    bail!("DMA read crossed the end of the SRAM aperture at {addr:08x}");
+                };
+                let len = available.min(buf.len());
+                match dev {
+                    Sram0 => self.sram0.read_buf(off, &mut buf[..len])?,
+                    Sram1 => self.sram1.read_buf(off, &mut buf[..len])?,
+                    _ => unreachable!(),
+                }
+                addr = addr.checked_add(len as u32)
+                    .ok_or_else(|| anyhow::anyhow!("DMA read address overflow"))?;
+                buf = &mut buf[len..];
+            }
+            return Ok(());
+        }
+
         let handle = match self.decode_phys_addr(addr) {
                 Some(val) => val,
                 None => { bail!("Unresolved physical address {addr:08x}"); }
