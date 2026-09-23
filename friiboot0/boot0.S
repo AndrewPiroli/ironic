@@ -20,7 +20,10 @@ _vectors:
 reset:
 	ldr sp,=stack
 	blx InitHardware
-    b hang
+	blx LoadAndDecrypt
+@	ldr pc, =#0xfff00000
+hang:
+	bkpt #0xff
 
 BEGIN_ASM_FUNC InitHardware
 @ Need to init AES & NAND Flash
@@ -37,16 +40,16 @@ BEGIN_ASM_FUNC InitHardware
     mov r5, #7
 	str r5, [r4, #0x60]
 @
-@ OTP init
-@
-    mov r5,#0x80000000
-	str r5, [r4, #0x1ec]
-@
 @ GPIO init
 @
 	mov r5,#0x00FF0000
 	str r5, [r4, #0x0dc]
 	str r5, [r4, #0x0e4]
+@
+@ OTP init
+@
+    mov r5,#0x80000000
+	str r5, [r4, #0x1ec]
 @
 @ AES init
 @
@@ -115,8 +118,57 @@ nandifzero:
 	bx lr
 END_ASM_FUNC
 
-hang:
-	bkpt #0xFF
+BEGIN_ASM_FUNC LoadAndDecrypt
+@
+@ Load 94k from block 0 of flash to =boot1addr
+@ decrypt with AES
+@ check ECC
+@ return if ok, otherwise we die here
+@
+	blx WaitNand
+	bkpt #0xff
+	bx lr
+END_ASM_FUNC
+
+.thumb
+BEGIN_ASM_FUNC WaitNand
+@
+@ Wait for the Nand Interface to be ready
+@ ... I mean it should always be but we are going
+@ to be good boys in case future me does something wack
+@
+    push {r3-r5, lr}
+	ldr r4, =nandbaseaddr
+	ldr r5, =0x80000000
+nandbusy:
+	ldr r3, [r4]
+	tst r3, r5
+	bmi nandbusy
+    pop {r3-r5, pc}
+.align 4
+nandbaseaddr:
+.word 0x0d010000
+END_ASM_FUNC
+
+.thumb
+BEGIN_ASM_FUNC WaitAes
+@
+@ Wait for the AES Interface to be ready
+@ Same story as above
+@
+    push {r3-r5, lr}
+	ldr r4, =aesbaseaddr
+	ldr r5, =0x80000000
+aesbusy:
+	ldr r3, [r4]
+	tst r3, r5
+	bmi aesbusy
+    pop {r3-r5, pc}
+.align 4
+aesbaseaddr:
+.word 0x0d020000
+END_ASM_FUNC
+
 
 .align 4
 bootkey:
