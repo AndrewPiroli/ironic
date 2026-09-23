@@ -117,6 +117,7 @@ impl InterpBackend {
         match self.boot_status {
             BootStatus::Boot0 => {
                 if self.cpu.read_fetch_pc() == 0xfff0_0000 {
+                    panic!("hiiiiii");
                     if let Some(bus) = self.bus.try_read_for(Duration::new(1,0)) { // Try to detect boot1 version
                         let boot1_otp_hash =
                         [

@@ -49,7 +49,7 @@ impl Cpu {
             scratch: 0,
             irq_input: false,
             current_exception: None,
-            dbg_on: false,
+            dbg_on: true,
         }
     }
 }
