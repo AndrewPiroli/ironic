@@ -1,6 +1,6 @@
 
 use anyhow::bail;
-use log::error;
+use log::{error, warn};
 
 use crate::bus::*;
 use crate::bus::prim::*;
@@ -35,14 +35,27 @@ pub trait MmioDeviceMultiWidth {
 }
 
 impl Bus {
-    fn denied_read(reason: anyhow::Error, width: BusWidth) -> anyhow::Result<BusPacket> {
-        error!(target: "BUS", "Dropping denied MMIO read: {reason}");
-        Ok(match width {
+    /// ENAHBIOPI selects AHB instead of the legacy Flipper region for these blocks.
+    /// FIXME: Are more affected?
+    fn mmio_region_active(&self, access: AccessContext, dev: IoDevice) -> bool {
+        const ENAHBIOPI: u32 = 1 << 0;
+        !matches!(dev, IoDevice::Di | IoDevice::Si | IoDevice::Exi)
+            || access.privilege.is_some() == (self.hlwd.busctrl.aipprot & ENAHBIOPI != 0)
+            || access.requester == Requester::Debugger
+    }
+
+    fn zero_mmio_read(width: BusWidth) -> BusPacket {
+        match width {
             BusWidth::B => BusPacket::Byte(0),
             BusWidth::H => BusPacket::Half(0),
             BusWidth::W => BusPacket::Word(0),
             BusWidth::_32B => BusPacket::_32Byte([0; 32]),
-        })
+        }
+    }
+
+    fn denied_read(reason: anyhow::Error, width: BusWidth) -> anyhow::Result<BusPacket> {
+        error!(target: "BUS", "Dropping denied MMIO read: {reason}");
+        Ok(Self::zero_mmio_read(width))
     }
 
     fn handle_mmio_read_result(result: anyhow::Result<BusPacket>, width: BusWidth) -> anyhow::Result<BusPacket> {
@@ -109,6 +122,10 @@ impl Bus {
 
     /// Dispatch a physical read access to some memory-mapped I/O device.
     pub fn do_mmio_read(&self, access: AccessContext, dev: IoDevice, off: usize, width: BusWidth) -> anyhow::Result<BusPacket> {
+        if !self.mmio_region_active(access, dev) {
+            warn!(target: "BUS", "Dropping MMIO read from inactive region: {access:?} {dev:?}+{off:#x} {width:?}, AIPPROT={:08x}", self.hlwd.busctrl.aipprot);
+            return Ok(Self::zero_mmio_read(width));
+        }
         if let Err(reason) = self.check_mmio_access(access, dev) {
             return Self::denied_read(reason, width);
         }
@@ -146,6 +163,10 @@ impl Bus {
 
     /// Dispatch a physical write access to some memory-mapped I/O device.
     pub fn do_mmio_write(&mut self, access: AccessContext, dev: IoDevice, off: usize, msg: BusPacket) -> anyhow::Result<()> {
+        if !self.mmio_region_active(access, dev) {
+            warn!(target: "BUS", "Dropping MMIO write to inactive region: {access:?} {dev:?}+{off:#x} {msg:?}, AIPPROT={:08x}", self.hlwd.busctrl.aipprot);
+            return Ok(());
+        }
         if let Err(reason) = self.check_mmio_access(access, dev) {
             error!(target: "BUS", "Dropping denied MMIO write: {reason}");
             return Ok(());

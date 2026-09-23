@@ -316,7 +316,7 @@ static void bus_hook(struct ppcemu_state *emu, uint32_t addr, unsigned int len, 
 		if (is_write)
 			return;
 		else
-			*(uint32_t *)data = IPC_Read32((addr - 0xfff00100) + 0x0d806840);
+			*(uint32_t *)data = IPC_Read32((addr - 0xfff00100) + 0x0c006840);
 	}
 	else if ((addr >= 0x00000000 && addr <= 0x017ffffff) || (addr >= 0x0c000000 && addr <= 0xdfffffff) || (addr >= 0x10000000 && addr <= 0x13ffffff)) {
 		if (len == 1) {

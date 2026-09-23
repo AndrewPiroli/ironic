@@ -25,7 +25,7 @@ static mut TLS_INIT: bool = false;
 
 const EXI_VECTOR_LO: u32 = 0xfff00100;
 const EXI_VECTOR_HI: u32 = 0xfff00200;
-const EXI_VECTOR_TARGET: u32 = 0x0d806840;
+const EXI_VECTOR_TARGET: u32 = 0x0c006840;
 
 fn addr_in_valid_range(addr: u32) -> bool {
     (0x0000_0000..=0x01ff_ffff).contains(&addr)

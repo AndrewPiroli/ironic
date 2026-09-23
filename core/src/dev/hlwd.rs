@@ -91,7 +91,7 @@ impl Default for BusCtrlInterface {
             // All AHB masters are enabled during the boot stage. IOS narrows
             // these permissions later as part of its normal initialization.
             ahbprot: u32::MAX,
-            aipprot: 0,
+            aipprot: 0xf,
         }
     }
 }
