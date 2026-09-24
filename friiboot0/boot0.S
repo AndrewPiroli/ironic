@@ -21,7 +21,7 @@ reset:
 	ldr sp,=stack
 	blx InitHardware
 	blx LoadAndDecrypt
-@	ldr pc, =#0xfff00000
+	ldr pc, =#0xfff00000
 hang:
 	bkpt #0xff
 
@@ -76,6 +76,7 @@ setkey:
 	bne setkey
 @ Write AES Src & Dest (offsets 0x4 & 0x8)
 	ldr r5, =boot1addr
+	ldr r5, [r5]
 	str r5, [r4, #0x4]
 	str r5, [r4, #0x8]
 @
@@ -128,27 +129,53 @@ BEGIN_ASM_FUNC LoadAndDecrypt
 @	r1 = current nand page
 @	r2 = nand "read setup" writeval
 @	r3 = 0
-@       r4 = base ptr
+@	r4 = nand iface base ptr
 @	r5 = nand "read" writeval
+@	r6 = boot1 base
+@	r7 = NAND data buf addr
+@	r8 = NAND ecc buf base addr
+@	r9 = NAND ecc buf calculated addr
+@	r10  AES interface base ptr
+@	r11  AES decrypt writeval
+	push {lr}
 	mov r2, #0x9F000000
-	ldr r5, =nandreadval
+	ldr r5, nandreadval
+	ldr r6, =boot1addr
+	ldr r6, [r6] @ stupid
+	ldr r10, aesbaseaddr
+	ldr r11, aeswriteval
+	add r8, r6, #0x17800
 readpage:
-	blx WaitNand
 	str r1, [r4, #0xc] @ NAND_ADDR2
 	blx WaitNand
-	str r2, [r4] @ read setup
+	str r2, [r4] @ read setup cmd
+	@ write NAND databuf to boot1addr + currPage << 11
+	add r7, r6, r1, lsl #11
+	str r7, [r4, #0x10]
+	@ write NAND eccbuf to base + 17800h + ((currPage & 1) << 7)
+	and r9, r1, #1
+	add r9, r8, r9, lsl #7
+	str r9, [r4, #0x14]
 	blx WaitNand
-	@ TODO write databuf to boot1addr + currPage << 11
-	@ TODO write eccbuf to base + 17800h + ((currPage & 1) << 7)
-	str r5, [r4]
-:decryptprevpage
-	cmp r1, #0
-	beq readpage
-	sub r1, #1
-	bkpt #0xff
-	bx lr
+	str r5, [r4] @ read cmd
+@ loaded from Nand
+@ todo check & fix ECC
+	blx WaitAes
+	cmp r1, #1
+	orreq r11,#0x1000 @ set chain for first page
+	eorne r11,#0x1000 @ clear for all other pages
+	str r11, [r10]
+	cmp r1, #47
+	addne r1, #1
+	bne readpage
+loadout:
+	pop {pc}
 nandreadval:
 .word 0x8030b840
+aesbaseaddr:
+.word 0x0d020000
+aeswriteval:
+.word 0x9800007F
 END_ASM_FUNC
 
 .thumb
@@ -175,16 +202,14 @@ BEGIN_ASM_FUNC WaitAes
 @ Same story as above
 @
 	push {r3-r5, lr}
-	ldr r4, =aesbaseaddr
 	ldr r5, =0x80000000
+	mov r4, r10
 aesbusy:
 	ldr r3, [r4]
 	tst r3, r5
 	bmi aesbusy
 	pop {r3-r5, pc}
 .align 4
-aesbaseaddr:
-.word 0x0d020000
 END_ASM_FUNC
 
 
