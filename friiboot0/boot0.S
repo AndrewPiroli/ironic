@@ -37,7 +37,7 @@ BEGIN_ASM_FUNC InitHardware
 	mov r4,#0x0d800000
 @ srnprot (offset 0x60)
 @ allow AES (bit 1), SHA (bit 2), and NAND (bit 4) interfaces to talk to SRAM.
-    mov r5, #7
+	mov r5, #7
 	str r5, [r4, #0x60]
 @
 @ GPIO init
@@ -48,34 +48,34 @@ BEGIN_ASM_FUNC InitHardware
 @
 @ OTP init
 @
-    mov r5,#0x80000000
+	mov r5,#0x80000000
 	str r5, [r4, #0x1ec]
 @
 @ AES init
 @
 	eor r4, #0x820000
 @ Reset AES Ctrl
-    str r3, [r4]
+	str r3, [r4]
 @ Clear IV (offset 0x10)
 clriv:
-    str r3, [r4, #0x10]
+	str r3, [r4, #0x10]
 	add r2, #1
 	cmp r2, #4
 	bne clriv
 @
-    mov r2, #0
+	mov r2, #0
 @ Write boot1 AES key (offset 0x0c)
 @ r5 = keyPtr
 @ r6 = keyVal
 	ldr r5,=bootkey
 setkey:
-    ldr r6, [r5, r2, lsl #0x2]
+	ldr r6, [r5, r2, lsl #0x2]
 	str r6, [r4, #0x0c]
 	add r2,#1
 	cmp r2, #4
 	bne setkey
 @ Write AES Src & Dest (offsets 0x4 & 0x8)
-    ldr r5, =boot1addr
+	ldr r5, =boot1addr
 	str r5, [r4, #0x4]
 	str r5, [r4, #0x8]
 @
@@ -85,27 +85,27 @@ setkey:
 @ SHA Ctrl (offset 0) Reset
 	str r3, [r4]
 @ Write SHA Src (offset 0x4)
-    str r5, [r4, #0x4]
+	str r5, [r4, #0x4]
 @
 @ Init NAND
 @
 	bic r4, #0x20000
 @ NAND Config Register (offset 0x4) Set Enable
-    mov r5, #0x08000000
+	mov r5, #0x08000000
 	str r5, [r4, #0x4]
 @ Zero following NAND Interface Registers
 @ ADDR1   (0x08)
 @ ADDR2   (0x0c)
 @ DATABUF (0x10)
 @ ECCBUF  (0x14)
-    lsr r5, #24
+	lsr r5, #24
 nandifzero:
 	str r3, [r4, r5]
 	add r5, #4
 	cmp r5, #0x18
 	bne nandifzero
 @ Send NAND Reset Command
-    mov r5, #0xff
+	mov r5, #0xff
 	lsl r5, #16
 	orr r5, #0x80000000
 	orr r5, #0x8000
@@ -113,8 +113,8 @@ nandifzero:
 @
 @ Reset Registers
 @ just read some 0s from mem1 lmao
-@
-    ldmia r3, {r2,r4,r5,r6}
+@ keep base ptr in r4
+	ldmia r3, {r2,r5,r6}
 	bx lr
 END_ASM_FUNC
 
@@ -125,9 +125,30 @@ BEGIN_ASM_FUNC LoadAndDecrypt
 @ check ECC
 @ return if ok, otherwise we die here
 @
+@	r1 = current nand page
+@	r2 = nand "read setup" writeval
+@	r3 = 0
+@       r4 = base ptr
+@	r5 = nand "read" writeval
+	mov r2, #0x9F000000
+	ldr r5, =nandreadval
+readpage:
 	blx WaitNand
+	str r1, [r4, #0xc] @ NAND_ADDR2
+	blx WaitNand
+	str r2, [r4] @ read setup
+	blx WaitNand
+	@ TODO write databuf to boot1addr + currPage << 11
+	@ TODO write eccbuf to base + 17800h + ((currPage & 1) << 7)
+	str r5, [r4]
+:decryptprevpage
+	cmp r1, #0
+	beq readpage
+	sub r1, #1
 	bkpt #0xff
 	bx lr
+nandreadval:
+.word 0x8030b840
 END_ASM_FUNC
 
 .thumb
@@ -137,17 +158,14 @@ BEGIN_ASM_FUNC WaitNand
 @ ... I mean it should always be but we are going
 @ to be good boys in case future me does something wack
 @
-    push {r3-r5, lr}
-	ldr r4, =nandbaseaddr
+	push {r3, r5, lr}
 	ldr r5, =0x80000000
 nandbusy:
 	ldr r3, [r4]
 	tst r3, r5
 	bmi nandbusy
-    pop {r3-r5, pc}
+	pop {r3, r5, pc}
 .align 4
-nandbaseaddr:
-.word 0x0d010000
 END_ASM_FUNC
 
 .thumb
@@ -156,14 +174,14 @@ BEGIN_ASM_FUNC WaitAes
 @ Wait for the AES Interface to be ready
 @ Same story as above
 @
-    push {r3-r5, lr}
+	push {r3-r5, lr}
 	ldr r4, =aesbaseaddr
 	ldr r5, =0x80000000
 aesbusy:
 	ldr r3, [r4]
 	tst r3, r5
 	bmi aesbusy
-    pop {r3-r5, pc}
+	pop {r3-r5, pc}
 .align 4
 aesbaseaddr:
 .word 0x0d020000
