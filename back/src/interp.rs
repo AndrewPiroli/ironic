@@ -117,7 +117,6 @@ impl InterpBackend {
         match self.boot_status {
             BootStatus::Boot0 => {
                 if self.cpu.read_fetch_pc() == 0xfff0_0000 {
-                    panic!("hiiiiii");
                     if let Some(bus) = self.bus.try_read_for(Duration::new(1,0)) { // Try to detect boot1 version
                         let boot1_otp_hash =
                         [
@@ -274,6 +273,7 @@ impl InterpBackend {
 
     /// Do a single step of the CPU.
     pub fn cpu_step(&mut self) -> CpuRes {
+        // if self.cpu_cycle > 100 { panic!() }
         assert!((self.cpu.read_fetch_pc() & 1) == 0);
 
         // Sample the IRQ line. If the IRQ line is high and IRQs are not 

@@ -141,7 +141,7 @@ BEGIN_ASM_FUNC LoadAndDecrypt
 	mov r2, #0x9F000000
 	ldr r5, nandreadval
 	ldr r6, =boot1addr
-	ldr r6, [r6] @ stupid
+@	ldr r6, [r6] @ stupid
 	ldr r10, aesbaseaddr
 	ldr r11, aeswriteval
 	add r8, r6, #0x17800
@@ -169,7 +169,8 @@ readpage:
 	addne r1, #1
 	bne readpage
 loadout:
-	pop {pc}
+	pop {lr}
+	bx lr
 nandreadval:
 .word 0x8030b840
 aesbaseaddr:

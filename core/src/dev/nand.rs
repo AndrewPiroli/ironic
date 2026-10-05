@@ -314,8 +314,8 @@ impl Bus {
         let reg = self.read_nand_regs();
         let mut next_cycle = 0;
 
-        //info!(target: "Other", "NND cmd={:?} addr={:05b} addr1={:08x} addr2={:08x} databuf={:08x} eccbuf={:08x} len={:08x}",
-        //    cmd.opcd, cmd.addr, reg.addr1, reg.addr2, reg.databuf, reg.eccbuf, cmd.len);
+        info!(target: "NAND", "NND cmd={:?} addr={:05b} addr1={:08x} addr2={:08x} databuf={:08x} eccbuf={:08x} len={:08x}",
+            cmd.opcd, cmd.addr, reg.addr1, reg.addr2, reg.databuf, reg.eccbuf, cmd.len);
 
         // Execute a NAND command.
         // This is kind of messed up because it's nicer to think about some
