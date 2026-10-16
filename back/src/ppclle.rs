@@ -25,7 +25,8 @@ static mut TLS_INIT: bool = false;
 
 const EXI_VECTOR_LO: u32 = 0xfff00100;
 const EXI_VECTOR_HI: u32 = 0xfff00200;
-const EXI_VECTOR_TARGET: u32 = 0x0c006840;
+const EXI_VECTOR_TARGET_PI: u32 = 0x0c006840;
+const EXI_VECTOR_TARGET_AHB: u32 = 0x0d806840;
 
 fn addr_in_valid_range(addr: u32) -> bool {
     (0x0000_0000..=0x01ff_ffff).contains(&addr)
@@ -68,7 +69,8 @@ unsafe extern "C" fn bus_hook(
             if is_write {
                 return;
             }
-            let target = (addr - EXI_VECTOR_LO) + EXI_VECTOR_TARGET;
+            // XXX this shouldn't be necessary
+            let target = (addr - EXI_VECTOR_LO) + if (bus.read().read32(Requester::Soc, 0x0d800070).unwrap() & 1) == 1 { EXI_VECTOR_TARGET_AHB } else { EXI_VECTOR_TARGET_PI };
             let val = match try_read_bounded(bus).read32(Requester::Ppc, target) {
                 Ok(v) => v,
                 Err(e) => { error!(target: "PPCLLE", "EXI vector read failed at {target:08x}: {e}"); 0 }
@@ -155,7 +157,7 @@ pub struct PpcEmu {
 }
 
 // For loading custom binary
-fn wii_test_init(state: *mut bindings::ppcemu_state) {
+fn wii_test_init(state: *mut bindings::ppcemu_state, pc: u32) {
     use bindings::*;
     unsafe {
         ppcemu_set_msr(state, PPCEMU_MSR_FP | PPCEMU_MSR_ME | PPCEMU_MSR_RI);
@@ -204,7 +206,7 @@ fn wii_test_init(state: *mut bindings::ppcemu_state) {
         ppcemu_set_spr(state, ppcemu_sprn_PPCEMU_SPRN_HID0, 0x001E7510);
         ppcemu_set_msr(
             state,
-            PPCEMU_MSR_FP | PPCEMU_MSR_ME | PPCEMU_MSR_RI | PPCEMU_MSR_DR | PPCEMU_MSR_IR,
+            PPCEMU_MSR_FP | PPCEMU_MSR_ME | PPCEMU_MSR_RI | (if pc & 0x8000_0000 == 0 { 0 } else { PPCEMU_MSR_DR | PPCEMU_MSR_IR }),
         );
     }
 }
@@ -340,7 +342,7 @@ impl Backend for PpcEmu {
             if let Some(path) = self.ppc_kernel.clone() {
                 if let Some(pc) = self.load_ppc_kernel(&path) {
                     info!(target: "PPCLLE", "Setting up CPU state for manually-staged PPC kernel");
-                    wii_test_init(self.state);
+                    wii_test_init(self.state, pc);
                     info!(target: "PPCLLE", "Overriding PC to custom kernel entry point {pc:08x}");
                     bindings::ppcemu_set_pc(self.state, pc);
                 }
