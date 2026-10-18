@@ -62,31 +62,30 @@ pub struct BigEndianMemory {
     already_wrote: AtomicBool,
 }
 impl BigEndianMemory {
-    pub fn new(len: usize, init_fn: Option<&str>, mut track_writes: bool) -> anyhow::Result<Self> {
+    pub fn new(len: usize) -> anyhow::Result<Self> {
+        let hash: Option<u32> = None;
+        let writes: Option<IntervalMap<usize, Vec<u8>>> = None;
+        let data = BackingMem::Local(vec![0u8; len]);
+        Ok(BigEndianMemory { data, hash, writes, write_index: 0, already_wrote: AtomicBool::new(true)})
+    }
+
+    pub fn from_file(len: usize, filename: &str, track_writes: bool) -> anyhow::Result<Self> {
         let mut hash: Option<u32> = None;
-        let data = if let Some(filename) = init_fn { unsafe {
-            let mut f = File::open(filename)?;
-            if let Ok(map) = MmapOptions::new().map_copy(&f) {
-                if track_writes {
-                    hash = Some(crc32fast::hash(&*map));
-                }
-                BackingMem::Mapped(map)
-            }
-            else {
-                error!(target: "Other", "mmaping {filename} failed, falling back to copy");
-                let mut data = vec![0u8; len];
-                let _ = f.read(&mut data)?; // ignore partial read
-                if track_writes {
-                    hash = Some(crc32fast::hash(&data));
-                }
-                BackingMem::Local(data)
-            }
-        }} else {
+        let mut f = File::open(filename)?;
+        let data = if let Ok(map) = unsafe { MmapOptions::new().map_copy(&f) } {
             if track_writes {
-                error!(target: "MEMSAVE", "Requested write tracking on anonymous memory");
-                track_writes = false;
+                hash = Some(crc32fast::hash(&*map));
             }
-            BackingMem::Local(vec![0u8; len])
+            BackingMem::Mapped(map)
+        }
+        else {
+            error!(target: "Other", "mmaping {filename} failed, falling back to copy");
+            let mut data = vec![0u8; len];
+            let _ = f.read(&mut data)?; // ignore partial read
+            if track_writes {
+                hash = Some(crc32fast::hash(&data));
+            }
+            BackingMem::Local(data)
         };
         let writes: Option<IntervalMap<usize, Vec<u8>>> = if track_writes {
             debug!(target: "MEMSAVE", "BEMemory: Writes Enabled, hash: {}", hash.unwrap());

@@ -61,7 +61,7 @@ impl SeepromState {
             num_bits: 0,
             out_buf: None,
             opcd: SeepromOp::Init,
-            data: BigEndianMemory::new(0x100, Some("seeprom.bin"), false)?,
+            data: BigEndianMemory::from_file(0x100, "seeprom.bin", false)?,
             wren: false,
             addr: None,
             write_buffer: None,

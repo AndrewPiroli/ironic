@@ -129,14 +129,14 @@ impl Card {
         if let Ok(f) = std::fs::File::open(FILENAME)
         && let Ok(metadata) = f.metadata() {
             len = metadata.len() as usize;
-            backing_mem = BigEndianMemory::new(len, Some(FILENAME), false).unwrap_or_else(|_|{
+            backing_mem = BigEndianMemory::from_file(len, FILENAME, false).unwrap_or_else(|_|{
                 card_inserted = false;
-                BigEndianMemory::new(len, None, false).unwrap()
+                BigEndianMemory::new(len).unwrap()
             });
         }
         else {
             card_inserted = false;
-            backing_mem = BigEndianMemory::new(len, None, false).unwrap();
+            backing_mem = BigEndianMemory::new(len).unwrap();
         }
         let capacity = CardCapacity::from_bytes(len);
         debug!(target: "SDHC", "SD card image size: {} bytes, capacity type: {:?}", len, capacity);
