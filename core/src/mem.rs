@@ -63,15 +63,14 @@ pub struct BigEndianMemory {
 }
 impl BigEndianMemory {
     pub fn new(len: usize) -> anyhow::Result<Self> {
-        let hash: Option<u32> = None;
-        let writes: Option<IntervalMap<usize, Vec<u8>>> = None;
         let data = BackingMem::Local(vec![0u8; len]);
-        Ok(BigEndianMemory { data, hash, writes, write_index: 0, already_wrote: AtomicBool::new(true)})
+        Ok(BigEndianMemory { data, hash: None, writes: None, write_index: 0, already_wrote: AtomicBool::new(true)})
     }
 
     pub fn from_file(len: usize, filename: &str, track_writes: bool) -> anyhow::Result<Self> {
+        use anyhow::Context;
         let mut hash: Option<u32> = None;
-        let mut f = File::open(filename)?;
+        let mut f = File::open(filename).with_context(|| format!("Failed to open file at {filename} for memory initialization"))?;
         let data = if let Ok(map) = unsafe { MmapOptions::new().map_copy(&f) } {
             if track_writes {
                 hash = Some(crc32fast::hash(&*map));
