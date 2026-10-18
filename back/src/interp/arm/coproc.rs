@@ -17,10 +17,10 @@ pub fn mrc(cpu: &mut Cpu, op: MoveCoprocBits) -> DispatchRes {
         cpu.reg[op.rt()] = val;
     } else {
         let val = cpu.p15.read_alt(op.crn(), op.crm(), op.opc2());
-        if val.n.is_some() { cpu.reg.cpsr.set_n(val.n.unwrap()); }
-        if val.z.is_some() { cpu.reg.cpsr.set_z(val.z.unwrap()); }
-        if val.c.is_some() { cpu.reg.cpsr.set_c(val.c.unwrap()); }
-        if val.v.is_some() { cpu.reg.cpsr.set_v(val.v.unwrap()); }
+        if let Some(n) = val.n { cpu.reg.cpsr.set_n(n); }
+        if let Some(z) = val.z { cpu.reg.cpsr.set_z(z); }
+        if let Some(c) = val.c { cpu.reg.cpsr.set_c(c); }
+        if let Some(v) = val.v { cpu.reg.cpsr.set_v(v); }
     }
     DispatchRes::RetireOk
 }
