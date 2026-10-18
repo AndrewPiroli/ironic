@@ -11,21 +11,15 @@ use ironic_backend::back::*;
 use ironic_backend::ppc::*;
 use log::info;
 use log::{debug, error};
-use strum::VariantNames;
 use parking_lot::RwLock;
 
+use std::io::Write;
 use std::process;
 use std::sync::Arc;
 use std::thread::Builder;
 use std::time::Duration;
 
 use clap::Parser;
-
-const LOGGING_EXAMPLE_TXT: &str = "
-Example usage for --logging
- Set base log level to INFO: `--logging info`
- Set base log level to WARN but override SHA to DEBUG: --logging warn,sha:debug
- Set base log level to ERROR but override SHA to TRACE and AES to DEBUG: --logging ERROR,sha:trace,aes:DEBUG";
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -47,9 +41,26 @@ struct Args {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    handle_logging_argument(args.logging)?;
     let custom_kernel = args.custom_kernel.clone();
     let enable_ppc_hle = args.ppc_hle;
+
+    env_logger::builder()
+        .parse_filters(&args.logging)
+        .format(|buf, record| {
+            let target = record.target();
+            if target == "SVC" {
+                writeln!(buf, "[{}] {}", record.target(), record.args())
+            } else {
+                use colored::Colorize;
+                let level = match record.level() {
+                    level @ log::Level::Debug => level.as_str().cyan(),
+                    level @ log::Level::Trace => level.as_str().bright_cyan(),
+                    level => level.as_str().normal(),
+                };
+                writeln!(buf, "[{}][{}] {}", record.target(), level, record.args())
+            }
+        })
+        .init();
 
     // The bus is shared between any threads we spin up
     let mut bus = match Bus::new() {
@@ -209,78 +220,6 @@ enum LogTarget {
     xHCI,
     RTPATCH,
     Other,
-}
-
-fn setup_logger(base_level: log::LevelFilter, target_level_overrides: &[(LogTarget, log::LevelFilter)]) -> anyhow::Result<()> {
-    use fern::colors::{Color, ColoredLevelConfig};
-    let colors = ColoredLevelConfig::default().debug(Color::Cyan).trace(Color::BrightCyan);
-    let mut config = fern::Dispatch::new().level(base_level);
-    for specific_override in target_level_overrides {
-        config = config.level_for(specific_override.0.to_string(), specific_override.1);
-    }
-    config = config.format(move |out, message, record| {
-        if record.target() == "SVC" {
-            out.finish(format_args!("[SVC] {}", message));
-        }
-        else {
-            out.finish(format_args!(
-                "[{}][{}] {}",
-                record.target(),
-                colors.color(record.level()),
-                message
-            ))
-        }
-    }).chain(std::io::stdout());
-    Ok(config.apply()?)
-}
-
-// I'm sorry for this monster
-fn handle_logging_argument(log_string: String) -> anyhow::Result<()> {
-    if !log_string.contains(',') {
-        if let Ok(base_only) = log_string.parse::<log::LevelFilter>() {
-            return setup_logger(base_only, &[]);
-        }
-        anyhow::bail!(
-            "Failed to parse --logging argument: Base-level must be `off`, `error`, `warn`, `info`, `debug`, or `trace`. You supplied \"{log_string}\"{LOGGING_EXAMPLE_TXT}"
-        );
-    }
-    let mut split = log_string.split(',');
-    let maybe_base_level = split.next().expect("BUG parsing logging argument! First call to Split.next() should always be Some(...)");
-    if let Ok(base_level) = maybe_base_level.parse::<log::LevelFilter>() {
-        let mut target_level_overrides: Vec<(LogTarget, log::LevelFilter)> = Vec::new();
-        for part in split {
-            let mut inner = part.split(':');
-            let maybe_target = inner.next().expect("BUG parsing logging argument! First call to Split.next() should always be Some(...)");
-            if let Ok(target) = maybe_target.parse::<LogTarget>()
-            {
-                let maybe_specific_override = inner.next().expect("BUG parsing logging argument! If we got this far, this call to Split.next() should return Some(...)");
-                if let Ok(specific_override) = maybe_specific_override.parse::<log::LevelFilter>()
-                {
-                    target_level_overrides.push((target, specific_override));
-                }
-                else {
-                    //parsing level failed
-                    anyhow::bail!(
-                        "Failed to parse --logging argument: Log level for target: {target} is not valid. Log level must be be `off`, `error`, `warn`, `info`, `debug`, or `trace`. You supplied \"{maybe_specific_override}\"{LOGGING_EXAMPLE_TXT}"
-                    )
-                }
-            }
-            else {
-                // parsing target failed
-                anyhow::bail!(
-                    "Failed to parse --logging argument: Not a valid logging subsystem/target! You specified: \"{maybe_target}\"\nValid options are:\n{:#?}{LOGGING_EXAMPLE_TXT}",
-                    LogTarget::VARIANTS
-                );
-            }
-        }
-        return setup_logger(base_level, target_level_overrides.as_slice());
-    }
-    else {
-        // Failed to parse base level
-        anyhow::bail!(
-            "Failed to parse --logging argument: Base-level must be `off`, `error`, `warn`, `info`, `debug`, or `trace`. You supplied \"{maybe_base_level}\"{LOGGING_EXAMPLE_TXT}"
-        );
-    }
 }
 
 fn enhanced_crashdump(addr2line_ctx: Context<EndianSlice<BigEndian>>, pc: u32, lr: u32) -> anyhow::Result<()> {

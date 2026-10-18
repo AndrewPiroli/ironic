@@ -11,9 +11,10 @@ ironic-core = { path = "../core" }
 ironic-backend = { path = "../back" }
 
 clap = { version = "~4.6.1", features = ["std", "derive", "suggestions", "color", "wrap_help"]}
+colored = { version = "~3.1.1" }
 anyhow = { version = "~1.0.102", features = ["std", "backtrace"] }
 log = { version = "~0.4.29", default-features = false, features = ["std"] }
-fern = { version = "~0.7.1", features = ["colored"] }
+env_logger = { version = "~0.11.11", default-features = false }
 strum = { version = "~0.28.0", features = ["derive"] }
 addr2line = { version = "~0.27.1", default-features = false, features = ["std"] }
 gimli = "~0.34.0"
