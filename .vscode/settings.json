@@ -4,4 +4,7 @@
       "core" : true,
       "tui" : true,
 	},
+  "rust-analyzer.cargo.cfgs": {
+    "have_ppcemu": ""
+  }
 }

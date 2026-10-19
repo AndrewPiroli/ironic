@@ -4,6 +4,7 @@ use log::{debug, info};
 use crate::bus::prim::*;
 use crate::bus::mmio::*;
 use crate::bus::task::*;
+use crate::dev::hlwd::irq::IrqCallback;
 
 /// Flipper IRQ lines for INTSR/INTMR
 #[derive(Debug, Copy, Clone)]
@@ -92,7 +93,10 @@ pub struct ProcessorInterface {
     /// At least one unmasked IRQ is pending (INTSR & INTMR != 0).
     /// This is the steady-state level for the output line, but the
     /// latch above is what actually triggers new interrupts.
-    pub irq_output: bool
+    pub irq_output: bool,
+
+    /// To avoid needing to poll for it in the LLE
+    pub pi_irq_callback: Option<IrqCallback>,
 }
 
 impl ProcessorInterface {
@@ -126,7 +130,13 @@ impl ProcessorInterface {
     /// Recalculate irq_output after a register write.
     fn update_irq_lines(&mut self) {
         // Ignore Reset Switch State
-        self.irq_output = ((self.intsr.0 & !0x0001_0000) & self.intmr.0) != 0;
+        let new_output = ((self.intsr.0 & !0x0001_0000) & self.intmr.0) != 0;
+        if new_output != self.irq_output {
+            if let Some(cb) = &self.pi_irq_callback {
+                (cb.0)(new_output);
+            }
+        }
+        self.irq_output = new_output;
     }
 }
 
