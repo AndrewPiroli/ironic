@@ -1,5 +1,7 @@
 
 pub mod util;
+#[cfg(target_arch = "aarch64")]
+pub mod aarch64;
 
 use anyhow::bail;
 use log::{debug, trace, warn, log_enabled};

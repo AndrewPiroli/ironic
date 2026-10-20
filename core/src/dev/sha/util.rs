@@ -14,7 +14,7 @@
 
 use std::{sync::atomic::{AtomicU8, Ordering::{Acquire, Release, AcqRel}}};
 
-const K: [u32; 4] = [ 0x5a82_7999, 0x6ed9_eba1, 0x8f1b_bcdc, 0xca62_c1d6, ];
+pub(super) const K: [u32; 4] = [ 0x5a82_7999, 0x6ed9_eba1, 0x8f1b_bcdc, 0xca62_c1d6, ];
 
 // Rust is annoying re: fn pointers.
 // Technically this entire thing could be an AtomicPtr<unsafe fn(&mut Sha1State)>
@@ -69,6 +69,16 @@ impl Sha1State {
         //   of the fn ptr does the proper feature checks to ensure the target_feature is present
         //   on the current CPU
         unsafe { PROCESS_MSG_FN(self) };
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[target_feature(enable = "neon")]
+    #[target_feature(enable = "sha2")]
+    unsafe fn process_message_aarch_sha2(&mut self) {
+        // SAFETY: This function is unsafe because it relies on the sha2 CPU extension, which isn’t
+        // present on every ARMv8 CPU, but we are inside a function enabling this target feature so
+        // it’s already checked.
+        unsafe { super::aarch64::compress(&mut self.digest, &[self.buf]) }
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -208,7 +218,10 @@ fn init_process_msg_fn_ptr() {
     use std::arch::is_aarch64_feature_detected;
     if FN_PTR_STATE.compare_exchange(STATE_UNTOUCHED, STATE_IN_MODIFICATION, AcqRel, Acquire).is_ok() {
         unsafe {
-            if is_aarch64_feature_detected!("sve2") {
+            if is_aarch64_feature_detected!("sha2") {
+                PROCESS_MSG_FN = Sha1State::process_message_aarch_sha2;
+            }
+            else if is_aarch64_feature_detected!("sve2") {
                 PROCESS_MSG_FN = Sha1State::process_message_aarch_neon_sve2;
             }
             else if is_aarch64_feature_detected!("neon") {
