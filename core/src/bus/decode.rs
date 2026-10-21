@@ -81,6 +81,20 @@ impl Bus {
             _ => None,
         }
     }
+
+    pub fn resolve_dma_sram(&self, addr: u32) -> Option<(MemDevice, usize, usize)> {
+        match addr {
+            0x0d40_0000..=0x0d40_ffff => {
+                let off = (addr - 0x0d40_0000) as usize;
+                Some((MemDevice::Sram0, off, 0x1_0000 - off))
+            },
+            0x0d41_0000..=0x0d41_7fff => {
+                let off = (addr - 0x0d41_0000) as usize;
+                Some((MemDevice::Sram1, off, 0x8000 - off))
+            },
+            _ => None,
+        }
+    }
 }
 
 /// These are helper functions for decoding physical addresses.
