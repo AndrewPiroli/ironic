@@ -16,6 +16,12 @@ pub struct EhcInterface {
     pub unk_b4: u32,
     pub unk_cc: u32,
 }
+const USBCMD_RUN: u32 = 1 << 0;
+const USBCMD_RESET: u32 = 1 << 1;
+const USBCMD_RESET_VALUE: u32 = 0x0008_0000;
+const USBSTS_HALTED: u32 = 1 << 12;
+const USBSTS_W1C: u32 = 0x3f;
+
 impl EhcInterface {
     pub fn new() -> Self {
         EhcInterface {
@@ -56,17 +62,21 @@ impl MmioDevice for EhcInterface {
     fn write(&mut self, off: usize, val: u32) -> anyhow::Result<Option<BusTask>> {
         match off {
             0x10 => {
-                if (self.usbcmd & 1 == 0) && (val & 1 == 1) {
-                    // setting RS=1, set HCHALTED=0
-                    self.usbsts &= !0x0000_1000;
+                if val & USBCMD_RESET != 0 {
+                    self.usbcmd = USBCMD_RESET_VALUE;
+                    self.usbsts = USBSTS_HALTED;
+                    self.usbintr = 0;
+                } else {
+                    self.usbcmd = val;
+                    if val & USBCMD_RUN != 0 {
+                        self.usbsts &= !USBSTS_HALTED;
+                    } else {
+                        self.usbsts |= USBSTS_HALTED;
+                    }
                 }
-                else if (self.usbcmd & 1 == 1) && (val & 1 == 0) {
-                    // setting RS=0, set HCHALTED=1
-                    self.usbsts |= 0x0000_1000;
-                }
-                self.usbcmd = val;
             },
-            0x14 => self.usbsts = val,
+            // Interrupt status bits are W1C, HCHalted is read-only
+            0x14 => self.usbsts &= !(val & USBSTS_W1C),
             0x18 => self.usbintr = val,
             0xa4 => self.unk_a4 = val,
             0xb0 => self.unk_b0 = val,
