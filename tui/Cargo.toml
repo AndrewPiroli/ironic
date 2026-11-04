@@ -19,4 +19,4 @@ strum = { version = "~0.28.0", features = ["derive"] }
 addr2line = { version = "~0.27.1", default-features = false, features = ["std"] }
 gimli = "~0.34.0"
 ctrlc = { version = "~3.5.2", features = ["termination"] }
-parking_lot = { version = "~0.12.5", default-features = false, features = ["nightly", "hardware-lock-elision"] }
+parking_lot = { version = "~0.13.0", default-features = false, features = ["nightly"] }

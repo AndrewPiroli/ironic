@@ -11,11 +11,11 @@ anyhow = { version = "~1.0.102", features = ["std", "backtrace"] }
 elf = { path = "../vendor/rust-elf", package = "elf2" }
 gimli = "~0.34.0"
 ironic-core = { path = "../core" }
-parking_lot = { version = "~0.12.5", default-features = false, features = ["nightly", "hardware-lock-elision"] }
+parking_lot = { version = "~0.13.0", default-features = false, features = ["nightly"] }
 log = { version = "~0.4.29", default-features = false, features = ["std"] }
 
 [target.'cfg(windows)'.dependencies]
 uds_windows = "~1.2.1"
 
 [build-dependencies]
-bindgen = "~0.72.1"
+bindgen = "~0.73.2"
