@@ -47,7 +47,7 @@ struct Args {
     #[clap(short, long)]
     ppc_hle: bool,
     /// Enable the PPC LLE system (default = False)
-    #[clap(short, long)]
+    #[clap(long)]
     ppc_lle: bool,
     /// Path to a PPC ELF for the PPC LLE backend
     #[clap(long)]
