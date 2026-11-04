@@ -67,8 +67,8 @@ pub fn umlal(cpu: &mut Cpu, op: SignedMlBits) -> DispatchRes {
 }
 
 pub fn smlabb(cpu: &mut Cpu, op: SmlabbBits) -> DispatchRes {
-    let lower = (cpu.reg[op.rn()] & 0xffff) as i64;
-    let upper = (cpu.reg[op.rm()] & 0xffff) as i64;
+    let lower = (cpu.reg[op.rn()] as u16 as i16) as i64;
+    let upper = (cpu.reg[op.rm()] as u16 as i16) as i64;
     let acc = cpu.reg[op.ra()] as i32;
     let mul = (lower * upper) as i32;
     let res = match mul.checked_add(acc) {
