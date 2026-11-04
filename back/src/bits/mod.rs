@@ -89,7 +89,14 @@ pub mod disassembly {
             Cond::AL |
             Cond::UNC => "",
         };
-        let mut res = format!("{instrcution:#}{condition} ");
+        let mut res = if instrcution == ArmInst::Smlaxy {
+            let bits = super::arm::SmlaxyBits(op);
+            let x = if bits.x() { 't' } else { 'b' };
+            let y = if bits.y() { 't' } else { 'b' };
+            format!("smla{x}{y}{condition} ")
+        } else {
+            format!("{instrcution:#}{condition} ")
+        };
         bits.fmt(&mut res, ctx)?;
         Ok(res)
     }

@@ -20,7 +20,7 @@ pub enum ArmInst {
     LdrReg, LdrbReg, LdrhReg, LdrdReg, LdrsbReg, LdrshReg, 
 
     Qdadd, Qsub, Qadd, Qdsub, Smull, Umlal, Smlal, Umull, Mul, Mla,
-    Smulwb, Smlawb, Smlalbb, Smlabb, Smulbb,
+    Smulwb, Smlawb, Smlalbb, Smlaxy, Smulbb,
 
     Ldrbt, Strbt, Ldrt, Strt, 
     MovImmAlt, LdrbtAlt, StrbtAlt, LdrtAlt, StrtAlt,
@@ -121,7 +121,7 @@ impl std::fmt::Display for ArmInst {
             ArmInst::Smulwb         => write!(f, "smulwb"),
             ArmInst::Smlawb         => write!(f, "wmlawb"),
             ArmInst::Smlalbb        => write!(f, "smlalbb"),
-            ArmInst::Smlabb         => write!(f, "smlabb"),
+            ArmInst::Smlaxy         => write!(f, "smlaxy"),
             ArmInst::Smulbb         => write!(f, "smulbb"),
             ArmInst::Ldrbt          => write!(f, "ldrbt"),
             ArmInst::Strbt          => write!(f, "strbt"),
@@ -214,7 +214,7 @@ impl ArmInst {
             0x01700010 => return CmnRegShiftReg,
             0x01100010 => return TstRegShiftReg,
             0x01500010 => return CmpRegShiftReg,
-            0x01000080 => return Smlabb,
+            0x01000080 => return Smlaxy,
             0x01600080 => return Smulbb,
             _ => {},
         }
@@ -450,7 +450,7 @@ impl ArmInst {
             ArmInst::Smulwb         => Box::new(SmulwbBits(bits)) as Box<dyn xDisplay>,
             ArmInst::Smlawb         => Box::new(SmlawbBits(bits)) as Box<dyn xDisplay>,
             ArmInst::Smlalbb        => Box::new(SmalbbBits(bits)) as Box<dyn xDisplay>,
-            ArmInst::Smlabb         => Box::new(SmlabbBits(bits)) as Box<dyn xDisplay>,
+            ArmInst::Smlaxy         => Box::new(SmlaxyBits(bits)) as Box<dyn xDisplay>,
             ArmInst::Smulbb         => Box::new(SmulbbBits(bits)) as Box<dyn xDisplay>,
             ArmInst::Ldrbt          => Box::new(LsTransBits(bits)) as Box<dyn xDisplay>,
             ArmInst::Strbt          => Box::new(LsTransBits(bits)) as Box<dyn xDisplay>,

@@ -66,18 +66,15 @@ pub fn umlal(cpu: &mut Cpu, op: SignedMlBits) -> DispatchRes {
     DispatchRes::RetireOk
 }
 
-pub fn smlabb(cpu: &mut Cpu, op: SmlabbBits) -> DispatchRes {
-    let lower = (cpu.reg[op.rn()] as u16 as i16) as i64;
-    let upper = (cpu.reg[op.rm()] as u16 as i16) as i64;
+pub fn smlaxy(cpu: &mut Cpu, op: SmlaxyBits) -> DispatchRes {
+    let operand1 = (cpu.reg[op.rn()] >> if op.x() { 16 } else { 0 }) as i16 as i32;
+    let operand2 = (cpu.reg[op.rm()] >> if op.y() { 16 } else { 0 }) as i16 as i32;
     let acc = cpu.reg[op.ra()] as i32;
-    let mul = (lower * upper) as i32;
-    let res = match mul.checked_add(acc) {
-        Some(res) => res,
-        None => {
-            cpu.reg.cpsr.set_q(true);
-            mul.wrapping_add(acc)
-        },
-    };
+    let mul = (operand1 * operand2) as i32;
+    let (res, overflow) = mul.overflowing_add(acc);
+    if overflow {
+        cpu.reg.cpsr.set_q(true);
+    }
     cpu.reg[op.rd()] = res as u32;
     DispatchRes::RetireOk
 }

@@ -433,10 +433,10 @@ impl DpTestRsrBits {
 }
 impl xDisplay for DpTestRsrBits {} // unused instruction
 
-/// ['Smlabb']
+/// ['Smlaxy']
 #[repr(transparent)]
-pub struct SmlabbBits(pub u32);
-impl SmlabbBits {
+pub struct SmlaxyBits(pub u32);
+impl SmlaxyBits {
     #[inline(always)]
     pub fn cond(&self) -> u32 { (self.0 & 0xf0000000) >> 28 }
     #[inline(always)]
@@ -446,13 +446,13 @@ impl SmlabbBits {
     #[inline(always)]
     pub fn rm(&self) -> u32 { (self.0 & 0x00000f00) >> 8 }
     #[inline(always)]
-    pub fn m(&self) -> bool { (self.0 & 0x00000040) != 0 }
+    pub fn y(&self) -> bool { (self.0 & 0x00000040) != 0 }
     #[inline(always)]
-    pub fn n(&self) -> bool { (self.0 & 0x00000020) != 0 }
+    pub fn x(&self) -> bool { (self.0 & 0x00000020) != 0 }
     #[inline(always)]
     pub fn rn(&self) -> u32 { self.0 & 0x0000000f }
 }
-impl xDisplay for SmlabbBits {
+impl xDisplay for SmlaxyBits {
     fn fmt(&self, f: &mut String, ctx: DisassemblyContext) -> anyhow::Result<()> {
         let _ = ctx;
         f.push_str(&format!("r{}, r{}, r{}, r{}", self.rd(), self.rn(), self.rm(), self.ra()));
