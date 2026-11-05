@@ -50,43 +50,53 @@ impl GpioInterface {
         let diff = self.arm.output ^ val;
         if (diff & 0x0000_1c00) != 0 {
             self.handle_seeprom(val)?;
-        } else if (diff & 0x00ff_0000) != 0 {
+        }
+        if (diff & 0x00ff_0000) != 0 {
             log::info!(target: "DEBUG_PORT", "[{:02x}]", (val & 0x00ff_0000) >> 16);
-        } else if (diff & 0x0000_000c) != 0 {
+        }
+        if (diff & 0x0000_000c) != 0 {
             info!(target: "Other", "GPIO Fan/DCDC output {diff:08x}");
-        } else if (diff & 0x0000_0010) != 0 {
+        }
+        if (diff & 0x0000_0010) != 0 {
             if (val & 0x0000_0010) != 0 {
-                info!(target: "Other", "GPIO DI Spinup enabled");
-            }
-            else {
                 info!(target: "Other", "GPIO DI Spinup disabled");
             }
-        } else if (diff & 0x0000_0020) != 0 {
+            else {
+                info!(target: "Other", "GPIO DI Spinup enabled");
+            }
+        }
+        if (diff & 0x0000_0020) != 0 {
             info!(target: "Other", "GPIO Disc Slot LED output");
-        } else if (diff & 0x0000_0100) != 0 {
+        }
+        if (diff & 0x0000_0100) != 0 {
             if (val & 0x0000_0100) != 0 {
                 info!(target: "Other", "GPIO Sensor Bar On");
             }
             else {
                 info!(target: "Other", "GPIO Sensors Bar Off");
             }
-        } else if (diff & 0x0000_4000) != 0 { // FIXME: actually emulate the AVE's i2c comms
+        }
+        if (diff & 0x0000_4000) != 0 { // FIXME: actually emulate the AVE's i2c comms
             if (val & 0x0000_4000) != 0 {
                 info!(target: "Other", "GPIO AVE Clock High");
             }
             else {
                 info!(target: "Other", "GPIO AVE Clock Low");
             }
-        } else if (diff & 0x0000_8000) != 0 {
+        }
+        if (diff & 0x0000_8000) != 0 {
             if (val & 0x0000_8000) != 0 {
                 info!(target: "Other", "GPIO AVE Data: 1");
             }
             else {
                 info!(target: "Other", "GPIO AVE Data: 0");
             }
-        } else {
+        }
+        if (diff & 0x00ff_dd3c) == 0 {
             bail!("Unhandled GPIO output arm.output={:08x} val={val:08x} diff={diff:08x}", self.arm.output);
         }
+        // Commit after all handlers have inspected the previous output state.
+        self.arm.output = val;
         Ok(())
     }
 }
