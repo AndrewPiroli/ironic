@@ -381,7 +381,39 @@ pub fn and_rsr(cpu: &mut Cpu, op: DpRsrBits) -> DispatchRes {
     DispatchRes::RetireOk
 }
 
-
+pub fn eor_rsr(cpu: &mut Cpu, op: DpRsrBits) -> DispatchRes {
+    let (val, carry) = barrel_shift(
+        ShiftArgs::RegShiftReg { rm: cpu.reg[op.rm()], stype: op.stype(), rs: cpu.reg[op.rs()], c_in: cpu.reg.cpsr.c() }
+    );
+    let val = cpu.reg[op.rn()] ^ val;
+    match (op.s(), op.rd() == 15) {
+        (true, true) => { // S + PC == exception return
+            if let Err(reason) = cpu.exception_return(val){
+                return DispatchRes::FatalErr(reason);
+            };
+            DispatchRes::RetireBranch
+        },
+        (true, false) => { // S + no PC == set flags
+            cpu.reg[op.rd()] = val;
+            let (n,z,c, v) = (
+                ((val >> 31) & 0x1 == 1), // N
+                val == 0, // Z
+                carry, // C
+                cpu.reg.cpsr.v() // V
+            );
+            set_all_flags!(cpu, n, z, c, v);
+            DispatchRes::RetireOk
+        },
+        (false, true) => { // no S + PC == branch
+            cpu.write_exec_pc(val);
+            DispatchRes::RetireBranch
+        },
+        (false, false) => { // no S + no PC == normal move/shift no flags
+            cpu.reg[op.rd()] = val;
+            DispatchRes::RetireOk
+        }
+    }
+}
 
 #[allow(unreachable_patterns)]
 fn do_bitwise_reg(cpu: &mut Cpu, opcd: DpRegBits, op: BitwiseOp) -> DispatchRes {

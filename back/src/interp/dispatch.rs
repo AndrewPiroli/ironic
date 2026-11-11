@@ -144,6 +144,7 @@ impl ArmFn {
 
             OrrRegShiftReg => ArmFn(afn!(arm::dataproc::orr_rsr)),
             AndRegShiftReg => ArmFn(afn!(arm::dataproc::and_rsr)),
+            EorRegShiftReg => ArmFn(afn!(arm::dataproc::eor_rsr)),
             Bkpt        => ArmFn(afn!(arm::misc::bkpt)),
             Svc         => ArmFn(afn!(arm::misc::svc)),
             _           => ArmFn(arm_unimpl_instr),
