@@ -436,3 +436,36 @@ impl MemoryPatchFile {
         }
     }
 }
+
+pub(crate) mod wrappers {
+    use super::*;
+    const EMBEDDED_BOOT0: &'static [u8] = include_bytes!("../../friiboot0/boot0.bin");
+    #[repr(transparent)]
+    pub struct Boot0(pub BigEndianMemory);
+    impl Boot0 {
+        pub(crate) fn new(path: &Path) -> Self {
+            match BigEndianMemory::from_file(0x0000_2000, path, false) {
+                Ok(x) => Self(x),
+                Err(_) => {
+                    log::warn!(target:"Other", "boot0.bin not detected, falling back to embedded boot0");
+                    let embedded_size = EMBEDDED_BOOT0.len();
+                    let mut temp = BigEndianMemory::new(0x2000);
+                    temp.data[0..embedded_size].copy_from_slice(EMBEDDED_BOOT0);
+                    Self(temp)
+                },
+            }
+        }
+    }
+    impl Deref for Boot0 {
+        type Target = BigEndianMemory;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+    impl DerefMut for Boot0 {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
+    }
+}

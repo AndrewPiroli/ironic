@@ -62,7 +62,7 @@ $ cargo build --release
 In order to boot, `ironic` expects the following files to live in the project 
 directory:
 
-- `boot0.bin` - The Wii boot ROM dumped from your console
+- `boot0.bin` - **Optional** The Wii boot ROM dumped from your console
 - `nand.bin` - The NAND flash data dumped from your console
 - `otp.bin` - The associated OTP/fused memory dumped from your console
 - `seeprom.bin` - The associated SEEPROM memory dumped from your console
@@ -78,3 +78,6 @@ Like `skyeye-starlet`, the `ironic-tui` target includes a server for PPC HLE.
 Tools for interacting with the server and representing processes on the 
 PowerPC-side of the machine can be found in [`pyronic/`](pyronic/).
 
+### Optional boot0
+The emulator comes with an embedded boot0 that is good enough for booting the system. It is not and will never be faithful to the real boot0 shipped on Wii consoles. If you would like to use a real boot0, dump it from your Wii using [Xyzzy-mod](https://github.com/DarkMatterCore/xyzzy-mod/releases/latest) and place the file boot0.bin in your working directory (or pass the --boot0 command line argument).
+This embedded boot0 is open source and free to share under the BSD license. See the friiboot0 folder for more details.

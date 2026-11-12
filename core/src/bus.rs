@@ -11,7 +11,7 @@ use log::error;
 
 use crate::bus::task::*;
 
-use crate::mem::*;
+use crate::mem::{*, wrappers::Boot0};
 use crate::dev::hlwd::*;
 use crate::dev::aes::*;
 use crate::dev::sha::*;
@@ -46,7 +46,7 @@ pub static DEBUGINFO: DebugInfo = DebugInfo {
 pub struct Bus {
     pub cache_control: std::sync::Arc<crate::cpu::icache::CacheControl>,
     // System memories
-    pub mrom: BigEndianMemory,
+    pub mrom: Boot0,
     pub sram0: BigEndianMemory,
     pub sram1: BigEndianMemory,
     pub mem1: BigEndianMemory,
@@ -76,7 +76,7 @@ impl Bus {
     pub fn new(boot0: &Path, nand: &Path, otp: &Path, seeprom: &Path, sd: Option<&Path>) -> anyhow::Result<Self> {
         Ok(Bus {
             cache_control: Default::default(),
-            mrom: BigEndianMemory::from_file(0x0000_2000, boot0, false)?,
+            mrom: Boot0::new(boot0),
             sram0: BigEndianMemory::new(0x0001_0000),
             sram1: BigEndianMemory::new(0x0001_0000),
             mem1: BigEndianMemory::new(0x0180_0000),
