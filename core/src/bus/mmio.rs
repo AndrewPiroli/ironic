@@ -244,6 +244,8 @@ impl Bus {
                     BusTask::SetMirrorEnabled(x) => self.mirror_enabled = x,
                     BusTask::SDHC(unit, task) => self.handle_task_sdhc(access, unit, task),
                     BusTask::PiFifo(burst) => self.handle_task_pi_fifo(burst)?,
+                    BusTask::Di { error, dma } => self.handle_task_di(error, dma)?,
+                    BusTask::DiIrqSync => self.handle_task_di_irq_sync(),
                 }
             } else {
                 idx += 1;

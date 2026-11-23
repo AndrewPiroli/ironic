@@ -40,6 +40,9 @@ struct Args {
     /// Path to a SD card image (defaults to sd.img if it exists)
     #[clap(long)]
     sd: Option<PathBuf>,
+    /// Path to a DVD image
+    #[clap(long)]
+    dvd: Option<PathBuf>,
     /// Path to a custom kernel ELF
     #[clap(short, long)]
     custom_kernel: Option<PathBuf>,
@@ -96,7 +99,8 @@ fn main() -> anyhow::Result<()> {
 
     // The bus is shared between any threads we spin up
     let sd = args.sd.clone().or_else(|| Some(PathBuf::from("sd.img")).filter(|p| p.exists()));
-    let mut bus = match Bus::new(&args.boot0, &args.nand, &args.otp, &args.seeprom, sd.as_deref()) {
+    let dvd = args.dvd.clone().or_else(|| Some(PathBuf::from("dvd.iso")).filter(|p| p.exists()));
+    let mut bus = match Bus::new(&args.boot0, &args.nand, &args.otp, &args.seeprom, sd.as_deref(), dvd.as_deref()) {
         Ok(val) => val,
         Err(reason) => {
             println!("Failed to construct emulator Bus: {reason}");

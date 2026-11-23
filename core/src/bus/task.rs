@@ -29,6 +29,12 @@ pub enum BusTask {
 
     /// A completed 32-byte burst from the PI FIFO.
     PiFifo([u8; 32]),
+
+    /// DI command finished
+    Di { error: bool, dma: Option<Vec<u8>> },
+    /// DI's DISR was written to (status W1C and/or mask bits) - recompute
+    /// whether its PI line should still be asserted.
+    DiIrqSync,
 }
 
 /// An entry kept by the [Bus], representing some task to-be-completed.
